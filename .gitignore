@@ -1,0 +1,12 @@
+# Swift package build products
+.build/
+.swiftpm/
+Package.resolved
+
+# The assembled app bundle is a build artifact — rebuild it with ./build.sh
+*.app/
+
+# Debug output from MACC_DEBUG=1 runs
+*.log
+
+.DS_Store

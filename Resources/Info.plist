@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>MAC Commander</string>
+	<key>CFBundleDisplayName</key>
+	<string>MAC Commander</string>
+	<key>CFBundleExecutable</key>
+	<string>MACCommander</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.local.maccommander</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>MAC Commander browses your Desktop so you can copy and move files.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>MAC Commander browses your Documents so you can copy and move files.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>MAC Commander browses your Downloads so you can copy and move files.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>MAC Commander browses external drives so you can copy and move files.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+</dict>
+</plist>
