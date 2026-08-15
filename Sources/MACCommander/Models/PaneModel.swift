@@ -158,6 +158,15 @@ final class PaneModel: ObservableObject {
         }
     }
 
+    /// Selects a row by name rather than by URL. `appendingPathComponent` asks
+    /// the filesystem what it is building and adds a trailing slash for
+    /// directories, so a URL assembled by hand does not compare equal to the one
+    /// `contentsOfDirectory` hands back, and the selection silently misses.
+    func selectItem(named name: String) {
+        guard let match = allItems.first(where: { $0.name == name }) else { return }
+        selection = [match.url]
+    }
+
     func selectAll() { selection = Set(items.map(\.url)) }
 
     func invertSelection() {

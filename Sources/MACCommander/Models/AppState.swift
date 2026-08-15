@@ -182,7 +182,7 @@ final class AppState: ObservableObject {
             try FileManager.default.moveItem(at: item.url, to: destination)
             push(.rename(from: item.url, to: destination))
             active.reload()
-            active.selection = [destination]
+            active.selectItem(named: trimmed)
         } catch {
             errorReport = ["Rename failed: \(error.localizedDescription)"]
         }
@@ -195,7 +195,7 @@ final class AppState: ObservableObject {
         do {
             try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
             active.reload()
-            active.selection = [destination]
+            active.selectItem(named: trimmed)
         } catch {
             errorReport = ["Could not create folder: \(error.localizedDescription)"]
         }
