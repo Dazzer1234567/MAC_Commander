@@ -94,11 +94,31 @@ struct PaneClickWatcher: NSViewRepresentable {
             return found
         }
 
-        static let debugEnabled = ProcessInfo.processInfo.environment["MACC_DEBUG"] == "1"
+        /// Enabled by `MACC_DEBUG=1`, or by `touch ~/.maccommander-debug` — the
+        /// marker file works when the app is launched detached via `open`,
+        /// where an environment variable cannot be passed in.
+        static let debugEnabled: Bool = {
+            ProcessInfo.processInfo.environment["MACC_DEBUG"] == "1"
+                || FileManager.default.fileExists(
+                    atPath: NSHomeDirectory() + "/.maccommander-debug")
+        }()
+
+        static let logURL = URL(
+            fileURLWithPath: NSHomeDirectory() + "/Library/Logs/MACCommander-click.log")
 
         static func log(_ message: String) {
             guard debugEnabled else { return }
-            FileHandle.standardError.write(Data("[click] \(message)\n".utf8))
+            let line = "[click] \(message)\n"
+            FileHandle.standardError.write(Data(line.utf8))
+
+            let fm = FileManager.default
+            if !fm.fileExists(atPath: logURL.path) {
+                fm.createFile(atPath: logURL.path, contents: nil)
+            }
+            guard let handle = try? FileHandle(forWritingTo: logURL) else { return }
+            handle.seekToEndOfFile()
+            handle.write(Data(line.utf8))
+            try? handle.close()
         }
 
         func stopMonitoring() {
