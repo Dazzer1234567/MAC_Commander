@@ -27,6 +27,13 @@ rm -rf "$APP"
 mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 cp Resources/Info.plist "${APP}/Contents/Info.plist"
 cp "$BINARY" "${APP}/Contents/MacOS/MACCommander"
+
+# Regenerate the icon when the artwork is newer than the packed .icns.
+if [ icons/logo.svg -nt Resources/AppIcon.icns ]; then
+	echo "==> rebuilding icon from icons/logo.svg"
+	swift Tools/make-icon.swift && iconutil -c icns icons/AppIcon.iconset -o Resources/AppIcon.icns
+fi
+[ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "${APP}/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "${APP}/Contents/PkgInfo"
 
 # macOS re-asks for folder access whenever the app's signing identity changes.

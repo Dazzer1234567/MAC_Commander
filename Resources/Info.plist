@@ -8,6 +8,10 @@
 	<string>MAC Commander</string>
 	<key>CFBundleExecutable</key>
 	<string>MACCommander</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.local.maccommander</string>
 	<key>CFBundleInfoDictionaryVersion</key>

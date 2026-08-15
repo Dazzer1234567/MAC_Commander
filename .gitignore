@@ -9,4 +9,7 @@ Package.resolved
 # Debug output from MACC_DEBUG=1 runs
 *.log
 
+# Intermediate PNGs — regenerated from icons/logo.svg by Tools/make-icon.swift
+icons/AppIcon.iconset/
+
 .DS_Store
