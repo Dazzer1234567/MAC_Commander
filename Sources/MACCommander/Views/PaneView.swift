@@ -351,10 +351,16 @@ private extension View {
     /// way negative padding did. The table clips the overflow, leaving a fill
     /// the full height of the line.
     func rowHighlight(selected: Bool) -> some View {
-        frame(maxWidth: .infinity, alignment: .leading)
+        // The gap between columns now lives inside the cell rather than between
+        // cells, so the values keep their breathing room while the band behind
+        // them still runs edge to edge.
+        padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(alignment: .center) {
                 if selected {
-                    PaneView.selectionTint.frame(height: 400)
+                    PaneView.selectionTint
+                        .frame(height: 400)
+                        .padding(.horizontal, -40)
                 }
             }
     }

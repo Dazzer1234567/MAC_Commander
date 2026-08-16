@@ -93,9 +93,15 @@ struct PaneClickWatcher: NSViewRepresentable {
         /// off lets the cells paint a lighter background themselves.
         func applyTableStyle() {
             guard let content = window?.contentView else { return }
-            for table in Self.allTableViews(in: content)
-            where table.selectionHighlightStyle != .none {
+            for table in Self.allTableViews(in: content) {
                 table.selectionHighlightStyle = .none
+                // Columns are separated by intercell spacing that lies outside
+                // every cell, so no cell background can ever cover it. Closing
+                // it is what lets the per-cell slices meet as one solid band.
+                if table.intercellSpacing.width != 0 {
+                    table.intercellSpacing = NSSize(
+                        width: 0, height: table.intercellSpacing.height)
+                }
             }
         }
 
