@@ -21,16 +21,31 @@ struct PaneClickWatcher: NSViewRepresentable {
     /// Shift-click on a row. Handled entirely here, so the event is swallowed.
     let onShiftClick: (Int) -> Void
 
+    /// Only the active pane responds to keys.
+    let isActive: Bool
+
+    /// Space, on the row under the cursor.
+    let onToggleMark: () -> Void
+
+    /// Backspace, to the enclosing folder.
+    let onGoUp: () -> Void
+
     func makeNSView(context: Context) -> WatcherView {
         let view = WatcherView()
         view.onClickInside = onClickInside
         view.onShiftClick = onShiftClick
+        view.isActive = isActive
+        view.onToggleMark = onToggleMark
+        view.onGoUp = onGoUp
         return view
     }
 
     func updateNSView(_ nsView: WatcherView, context: Context) {
         nsView.onClickInside = onClickInside
         nsView.onShiftClick = onShiftClick
+        nsView.isActive = isActive
+        nsView.onToggleMark = onToggleMark
+        nsView.onGoUp = onGoUp
         nsView.applyTableStyle()
     }
 
@@ -38,9 +53,18 @@ struct PaneClickWatcher: NSViewRepresentable {
         nsView.stopMonitoring()
     }
 
+    private enum Key {
+        static let space: UInt16 = 49
+        static let backspace: UInt16 = 51
+    }
+
     final class WatcherView: NSView {
         var onClickInside: ((Int?) -> Void)?
         var onShiftClick: ((Int) -> Void)?
+        var isActive = false
+        var onToggleMark: (() -> Void)?
+        var onGoUp: (() -> Void)?
+        private var keyMonitor: Any?
         private var monitor: Any?
 
         override func viewDidMoveToWindow() {
@@ -79,6 +103,29 @@ struct PaneClickWatcher: NSViewRepresentable {
                 // ⌘-click still belongs to the table.
                 self.onClickInside?(modifiers.isEmpty ? self.row(under: event) : nil)
                 return event
+            }
+
+            // Space and Backspace go through the same monitor rather than
+            // `onKeyPress`, which the table swallows, and rather than a menu
+            // shortcut, which would steal the keys from the filter and rename
+            // fields. The first-responder check is what keeps typing intact.
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, self.isActive, let window = self.window,
+                      event.window === window,
+                      !(window.firstResponder is NSText),
+                      event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+                else { return event }
+
+                switch event.keyCode {
+                case PaneClickWatcher.Key.space:
+                    self.onToggleMark?()
+                    return nil
+                case PaneClickWatcher.Key.backspace:
+                    self.onGoUp?()
+                    return nil
+                default:
+                    return event
+                }
             }
         }
 
@@ -172,12 +219,15 @@ struct PaneClickWatcher: NSViewRepresentable {
                 NSEvent.removeMonitor(monitor)
                 self.monitor = nil
             }
+            if let keyMonitor {
+                NSEvent.removeMonitor(keyMonitor)
+                self.keyMonitor = nil
+            }
         }
 
         deinit {
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
-            }
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         }
     }
 }

@@ -92,8 +92,10 @@ struct AppCommands: Commands {
 
         CommandGroup(after: .pasteboard) {
             Divider()
-            Button("Mark / Unmark") { state.active.toggleMark() }
-                .keyboardShortcut(.space, modifiers: [])
+            // No plain-Space shortcut here: a menu equivalent fires even while
+            // a text field has focus, which would stop you typing spaces into
+            // the filter or a rename. The pane's key monitor handles Space.
+            Button("Mark / Unmark  (Space)") { state.active.toggleMark() }
             Button("Mark All") { state.active.markAll() }
                 .keyboardShortcut("a", modifiers: [.command, .option])
             Button("Invert Marks") { state.active.invertMarks() }

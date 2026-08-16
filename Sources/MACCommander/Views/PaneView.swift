@@ -53,7 +53,9 @@ struct PaneView: View {
             }, onShiftClick: { row in
                 focusedSide = side
                 pane.markRange(toRowAt: row)
-            })
+            }, isActive: isActive,
+               onToggleMark: { pane.toggleMark() },
+               onGoUp: { pane.goUp() })
         )
         .overlay {
             Rectangle()
@@ -239,20 +241,12 @@ struct PaneView: View {
             focusedSide = side
             pane.open(Array(urls))
         }
-        .onKeyPress(.space) {
-            pane.toggleMark()
-            return .handled
-        }
         .onKeyPress(.return) {
             pane.open(Array(pane.selection))
             return .handled
         }
         .onKeyPress(.tab) {
             focusedSide = side.other
-            return .handled
-        }
-        .onKeyPress(.delete) {
-            pane.goUp()
             return .handled
         }
         .dropDestination(for: URL.self) { urls, _ in
