@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -14,12 +15,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             quickBar
             Divider()
-            HSplitView {
-                PaneView(pane: state.left, state: state, side: .left, focusedSide: $focusedSide)
-                    .frame(minWidth: 320)
-                PaneView(pane: state.right, state: state, side: .right, focusedSide: $focusedSide)
-                    .frame(minWidth: 320)
-            }
+            splitArea
             if let progress = transfer.progress {
                 Divider()
                 TransferBar(progress: progress) { transfer.cancel() }
@@ -50,6 +46,49 @@ struct ContentView: View {
         } message: {
             Text(state.errorReport.prefix(10).joined(separator: "\n"))
         }
+    }
+
+    private static let handleWidth: CGFloat = 6
+    private static let minPaneWidth: CGFloat = 220
+
+    /// A split laid out by hand rather than with `HSplitView`, because
+    /// HSplitView offers no way to set the divider position and is not
+    /// dependably backed by an NSSplitView we could drive instead. Owning the
+    /// width outright is what makes Fit a one-line reset.
+    private var splitArea: some View {
+        GeometryReader { geometry in
+            let fixed = CenterBar.width + Self.handleWidth
+            let evenSplit = max(Self.minPaneWidth, (geometry.size.width - fixed) / 2)
+            let widest = max(Self.minPaneWidth, geometry.size.width - fixed - Self.minPaneWidth)
+            let leftWidth = min(max(state.leftPaneWidth ?? evenSplit, Self.minPaneWidth), widest)
+
+            HStack(spacing: 0) {
+                PaneView(pane: state.left, state: state, side: .left, focusedSide: $focusedSide)
+                    .frame(width: leftWidth)
+                dragHandle
+                CenterBar(state: state)
+                    .frame(width: CenterBar.width)
+                PaneView(pane: state.right, state: state, side: .right, focusedSide: $focusedSide)
+                    .frame(maxWidth: .infinity)
+            }
+            .coordinateSpace(name: "split")
+        }
+    }
+
+    private var dragHandle: some View {
+        Rectangle()
+            .fill(Color(nsColor: .separatorColor))
+            .frame(width: Self.handleWidth)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside { NSCursor.resizeLeftRight.set() } else { NSCursor.arrow.set() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .named("split"))
+                    .onChanged { value in
+                        state.leftPaneWidth = value.location.x
+                    }
+            )
     }
 
     private var quickBar: some View {

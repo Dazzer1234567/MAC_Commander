@@ -52,6 +52,11 @@ final class AppState: ObservableObject {
     @Published var errorReport: [String] = []
     @Published private(set) var undoStack: [UndoableAction] = []
 
+    /// Width of the left pane. `nil` means "an even split of whatever is
+    /// available", which is exactly what the Fit button wants, so Fit is just a
+    /// reset rather than a calculation.
+    @Published var leftPaneWidth: CGFloat?
+
     let bookmarks = BookmarkStore()
     let links = LinkStore()
     let transfer = TransferController()
@@ -85,6 +90,9 @@ final class AppState: ObservableObject {
     // MARK: - Pane management
 
     func toggleActiveSide() { activeSide = activeSide.other }
+
+    /// Gives both panes the same width.
+    func fitPanes() { leftPaneWidth = nil }
 
     func swapPanes() {
         let leftDir = left.directory

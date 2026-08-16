@@ -26,6 +26,7 @@ struct PaneClickWatcher: NSViewRepresentable {
 
     func updateNSView(_ nsView: WatcherView, context: Context) {
         nsView.onClickInside = onClickInside
+        nsView.applyTableStyle()
     }
 
     static func dismantleNSView(_ nsView: WatcherView, coordinator: ()) {
@@ -40,6 +41,7 @@ struct PaneClickWatcher: NSViewRepresentable {
             super.viewDidMoveToWindow()
             stopMonitoring()
             guard window != nil else { return }
+            applyTableStyle()
 
             monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
                 guard let self, let window = self.window, event.window === window else {
@@ -83,6 +85,18 @@ struct PaneClickWatcher: NSViewRepresentable {
             }
             Self.log("click matched no table")
             return nil
+        }
+
+        /// SwiftUI gives no control over the selection colour: `.tint` does not
+        /// reach a Table's highlight, and the source-list style only rounds it
+        /// while still using the system accent. Switching AppKit's own drawing
+        /// off lets the cells paint a lighter background themselves.
+        func applyTableStyle() {
+            guard let content = window?.contentView else { return }
+            for table in Self.allTableViews(in: content)
+            where table.selectionHighlightStyle != .none {
+                table.selectionHighlightStyle = .none
+            }
         }
 
         private static func allTableViews(in view: NSView) -> [NSTableView] {

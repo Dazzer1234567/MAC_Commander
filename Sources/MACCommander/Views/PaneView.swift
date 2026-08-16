@@ -9,6 +9,12 @@ struct PaneView: View {
     @FocusState private var filterFieldFocused: Bool
     @State private var isDropTarget = false
 
+    /// A pale blue that keeps the row text legible, rather than the saturated
+    /// system selection colour.
+    static let selectionTint = Color(
+        nsColor: NSColor(calibratedRed: 0.72, green: 0.85, blue: 0.98, alpha: 1.0)
+    )
+
     private var isActive: Bool { state.activeSide == side }
 
     var body: some View {
@@ -193,6 +199,7 @@ struct PaneView: View {
                         .italic(item.isSymlink)
                     Spacer(minLength: 0)
                 }
+                .rowHighlight(selected: pane.selection.contains(item.url))
             }
             .width(min: 140, ideal: 260)
 
@@ -201,6 +208,7 @@ struct PaneView: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .frame(maxWidth: .infinity, alignment: .trailing)
+                    .rowHighlight(selected: pane.selection.contains(item.url))
             }
             .width(min: 60, ideal: 80, max: 140)
 
@@ -208,6 +216,7 @@ struct PaneView: View {
                 Text(item.displayDate)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
+                    .rowHighlight(selected: pane.selection.contains(item.url))
             }
             .width(min: 110, ideal: 140, max: 200)
         }
@@ -328,5 +337,25 @@ struct PaneView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+
+
+private extension View {
+    /// Each cell paints its own slice of the selection band, because AppKit's
+    /// row-level highlight is switched off in `PaneClickWatcher`.
+    ///
+    /// The band is drawn as a `.background`, which does not take part in sizing,
+    /// so making it deliberately taller than any row cannot stretch the row the
+    /// way negative padding did. The table clips the overflow, leaving a fill
+    /// the full height of the line.
+    func rowHighlight(selected: Bool) -> some View {
+        frame(maxWidth: .infinity, alignment: .leading)
+            .background(alignment: .center) {
+                if selected {
+                    PaneView.selectionTint.frame(height: 400)
+                }
+            }
     }
 }

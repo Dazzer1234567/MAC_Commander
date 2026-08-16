@@ -122,6 +122,8 @@ struct AppCommands: Commands {
                 .keyboardShortcut("u", modifiers: .command)
             Button("Other Pane → This Folder") { state.syncOtherPaneToActive() }
                 .keyboardShortcut("=", modifiers: [.command, .shift])
+            Button("Equal Pane Widths") { state.fitPanes() }
+                .keyboardShortcut("=", modifiers: [.command, .option])
             Divider()
             Button("Home") { state.active.navigate(to: FileManager.default.homeDirectoryForCurrentUser) }
                 .keyboardShortcut("h", modifiers: [.command, .shift])
