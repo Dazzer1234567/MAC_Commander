@@ -37,7 +37,7 @@ struct PaneView: View {
         }
         .background(Color(nsColor: .textBackgroundColor))
         .background(
-            PaneClickWatcher { clickedRow in
+            PaneClickWatcher(onClickInside: { clickedRow in
                 // Only step in for the inactive pane. In the active pane the
                 // table already handles clicks correctly, and interfering would
                 // break range- and drag-selection.
@@ -50,7 +50,10 @@ struct PaneView: View {
                 } else {
                     PaneClickWatcher.WatcherView.log("no row resolved (row=\(String(describing: clickedRow)), items=\(rows.count))")
                 }
-            }
+            }, onShiftClick: { row in
+                focusedSide = side
+                pane.markRange(toRowAt: row)
+            })
         )
         .overlay {
             Rectangle()

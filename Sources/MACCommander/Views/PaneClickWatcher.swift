@@ -18,14 +18,19 @@ struct PaneClickWatcher: NSViewRepresentable {
     /// carried a modifier key (in which case selection is left to the table).
     let onClickInside: (Int?) -> Void
 
+    /// Shift-click on a row. Handled entirely here, so the event is swallowed.
+    let onShiftClick: (Int) -> Void
+
     func makeNSView(context: Context) -> WatcherView {
         let view = WatcherView()
         view.onClickInside = onClickInside
+        view.onShiftClick = onShiftClick
         return view
     }
 
     func updateNSView(_ nsView: WatcherView, context: Context) {
         nsView.onClickInside = onClickInside
+        nsView.onShiftClick = onShiftClick
         nsView.applyTableStyle()
     }
 
@@ -35,6 +40,7 @@ struct PaneClickWatcher: NSViewRepresentable {
 
     final class WatcherView: NSView {
         var onClickInside: ((Int?) -> Void)?
+        var onShiftClick: ((Int) -> Void)?
         private var monitor: Any?
 
         override func viewDidMoveToWindow() {
@@ -59,8 +65,18 @@ struct PaneClickWatcher: NSViewRepresentable {
                 guard self.bounds.contains(localPoint) else { return event }
                 Self.log("mousedown inside pane, bounds=\(self.bounds.size)")
 
-                // ⌘/⇧ clicks extend a selection; that is the table's job, not ours.
                 let modifiers = event.modifierFlags.intersection([.command, .shift, .option])
+
+                // Shift-click marks a range instead of extending the blue
+                // cursor across rows. This is the one case the event must be
+                // swallowed: left alive, the table would draw its own multi-row
+                // selection over the single-row cursor we want.
+                if modifiers == .shift, let row = self.row(under: event) {
+                    self.onShiftClick?(row)
+                    return nil
+                }
+
+                // ⌘-click still belongs to the table.
                 self.onClickInside?(modifiers.isEmpty ? self.row(under: event) : nil)
                 return event
             }

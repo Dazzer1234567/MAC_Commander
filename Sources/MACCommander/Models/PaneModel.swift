@@ -93,6 +93,21 @@ final class PaneModel: ObservableObject {
         }
     }
 
+    /// Shift-click: mark everything from the cursor down (or up) to the row
+    /// clicked, and leave the cursor on that row. The anchor is wherever the
+    /// cursor currently sits, so successive shift-clicks extend from the last
+    /// one rather than from the original click.
+    func markRange(toRowAt index: Int) {
+        let rows = items
+        guard rows.indices.contains(index) else { return }
+        let anchorIndex = selection.count == 1
+            ? (rows.firstIndex { selection.contains($0.url) } ?? index)
+            : index
+        let span = min(anchorIndex, index)...max(anchorIndex, index)
+        marked.formUnion(rows[span].map(\.url))
+        selection = [rows[index].url]
+    }
+
     func unmarkAll() { marked = [] }
 
     func markAll() { marked = Set(items.map(\.url)) }
