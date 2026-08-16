@@ -41,7 +41,15 @@ struct PaneClickWatcher: NSViewRepresentable {
             super.viewDidMoveToWindow()
             stopMonitoring()
             guard window != nil else { return }
+            // The tables may not exist yet on first layout, and the inactive
+            // pane can otherwise keep its stripes until something makes it
+            // redraw, so try again shortly after appearing.
             applyTableStyle()
+            for delay in [0.05, 0.2, 0.6] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    self?.applyTableStyle()
+                }
+            }
 
             monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
                 guard let self, let window = self.window, event.window === window else {
@@ -95,6 +103,8 @@ struct PaneClickWatcher: NSViewRepresentable {
             guard let content = window?.contentView else { return }
             for table in Self.allTableViews(in: content) {
                 table.selectionHighlightStyle = .none
+                // Belt and braces with the SwiftUI table style: no zebra striping.
+                table.usesAlternatingRowBackgroundColors = false
                 // Columns are separated by intercell spacing that lies outside
                 // every cell, so no cell background can ever cover it. Closing
                 // it is what lets the per-cell slices meet as one solid band.

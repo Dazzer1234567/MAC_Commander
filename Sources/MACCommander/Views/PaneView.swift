@@ -228,7 +228,7 @@ struct PaneView: View {
             .width(min: 110, ideal: 140, max: 200)
         }
         .font(.system(size: 12))
-        .tableStyle(.inset(alternatesRowBackgrounds: true))
+        .tableStyle(.inset)
         .focused($focusedSide, equals: side)
         .contextMenu(forSelectionType: URL.self) { urls in
             rowMenu(for: urls)
