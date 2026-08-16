@@ -92,6 +92,16 @@ struct AppCommands: Commands {
 
         CommandGroup(after: .pasteboard) {
             Divider()
+            Button("Mark / Unmark") { state.active.toggleMark() }
+                .keyboardShortcut(.space, modifiers: [])
+            Button("Mark All") { state.active.markAll() }
+                .keyboardShortcut("a", modifiers: [.command, .option])
+            Button("Invert Marks") { state.active.invertMarks() }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+            Button("Unmark All") { state.active.unmarkAll() }
+                .keyboardShortcut("u", modifiers: [.command, .option])
+                .disabled(state.active.marked.isEmpty)
+            Divider()
             Button("Select All") { state.active.selectAll() }
                 .keyboardShortcut("a", modifiers: .command)
             Button("Invert Selection") { state.active.invertSelection() }

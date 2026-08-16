@@ -34,7 +34,13 @@ final class DirectoryWatcher {
 final class PaneModel: ObservableObject {
     @Published private(set) var directory: URL
     @Published private(set) var allItems: [FileItem] = []
+    /// The cursor: the row (or rows) highlighted in blue. Moving it is not a
+    /// selection in the Total Commander sense.
     @Published var selection: Set<URL> = []
+
+    /// Items marked with the space bar, shown in red. These are what commands
+    /// act on; the cursor is only a fallback when nothing is marked.
+    @Published var marked: Set<URL> = []
     @Published var filter: String = ""
     @Published var filterVisible = false
     @Published var showHidden = false
@@ -67,7 +73,37 @@ final class PaneModel: ObservableObject {
 
     var selectedItems: [FileItem] { items.filter { selection.contains($0.url) } }
 
+    var markedItems: [FileItem] { items.filter { marked.contains($0.url) } }
+
+    /// What a command should act on: everything marked, or the row under the
+    /// cursor when nothing is marked.
+    var operationTargets: [FileItem] {
+        marked.isEmpty ? selectedItems : markedItems
+    }
+
+    /// Space toggles the mark on whatever the cursor covers. Marking is
+    /// all-or-nothing across the cursor so a repeated press always reverses the
+    /// previous one.
+    func toggleMark() {
+        guard !selection.isEmpty else { return }
+        if selection.isSubset(of: marked) {
+            marked.subtract(selection)
+        } else {
+            marked.formUnion(selection)
+        }
+    }
+
+    func unmarkAll() { marked = [] }
+
+    func markAll() { marked = Set(items.map(\.url)) }
+
+    func invertMarks() {
+        marked = Set(items.map(\.url)).symmetricDifference(marked)
+    }
+
     var selectedSize: Int64 { selectedItems.reduce(0) { $0 + ($1.navigable ? 0 : $1.size) } }
+
+    var markedSize: Int64 { markedItems.reduce(0) { $0 + ($1.navigable ? 0 : $1.size) } }
 
     var canGoUp: Bool { directory.path != "/" }
     var canGoBack: Bool { !backStack.isEmpty }
@@ -100,7 +136,9 @@ final class PaneModel: ObservableObject {
             allItems = []
             loadError = error.localizedDescription
         }
-        selection.formIntersection(Set(allItems.map(\.url)))
+        let valid = Set(allItems.map(\.url))
+        selection.formIntersection(valid)
+        marked.formIntersection(valid)
     }
 
     private func startWatching() {
@@ -123,6 +161,7 @@ final class PaneModel: ObservableObject {
         directory = target
         filter = ""
         selection = select.map { [$0] } ?? []
+        marked = []
         reload()
         startWatching()
     }

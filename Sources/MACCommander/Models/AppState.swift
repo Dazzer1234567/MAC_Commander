@@ -112,8 +112,9 @@ final class AppState: ObservableObject {
 
     // MARK: - File commands
 
-    /// The rows a command should act on: the selection, or nothing if empty.
-    var operands: [FileItem] { active.selectedItems }
+    /// The rows a command should act on: whatever is marked with the space bar,
+    /// falling back to the row under the cursor.
+    var operands: [FileItem] { active.operationTargets }
 
     func copyToOtherPane() { runTransfer(.copy) }
     func moveToOtherPane() { runTransfer(.move) }

@@ -17,6 +17,12 @@ struct PaneView: View {
 
     private var isActive: Bool { state.activeSide == side }
 
+    /// Marked rows are red; everything else keeps its normal colour.
+    private func textColor(for item: FileItem, dim: Bool) -> Color {
+        if pane.marked.contains(item.url) { return .red }
+        return dim ? .secondary : .primary
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -195,7 +201,8 @@ struct PaneView: View {
                 HStack(spacing: 5) {
                     Image(nsImage: item.icon)
                     Text(item.name)
-                        .foregroundStyle(item.isHidden ? Color.secondary : Color.primary)
+                        .foregroundStyle(textColor(for: item, dim: item.isHidden))
+                        .fontWeight(pane.marked.contains(item.url) ? .semibold : .regular)
                         .italic(item.isSymlink)
                     Spacer(minLength: 0)
                 }
@@ -205,7 +212,7 @@ struct PaneView: View {
 
             TableColumn("Size", value: \.size) { item in
                 Text(item.displaySize)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(textColor(for: item, dim: true))
                     .monospacedDigit()
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .rowHighlight(selected: pane.selection.contains(item.url))
@@ -214,7 +221,7 @@ struct PaneView: View {
 
             TableColumn("Modified", value: \.modified) { item in
                 Text(item.displayDate)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(textColor(for: item, dim: true))
                     .monospacedDigit()
                     .rowHighlight(selected: pane.selection.contains(item.url))
             }
@@ -228,6 +235,10 @@ struct PaneView: View {
         } primaryAction: { urls in
             focusedSide = side
             pane.open(Array(urls))
+        }
+        .onKeyPress(.space) {
+            pane.toggleMark()
+            return .handled
         }
         .onKeyPress(.return) {
             pane.open(Array(pane.selection))
@@ -319,13 +330,17 @@ struct PaneView: View {
     private var footer: some View {
         HStack(spacing: 8) {
             Text("\(pane.items.count) item\(pane.items.count == 1 ? "" : "s")")
-            if !pane.selection.isEmpty {
+            if !pane.marked.isEmpty {
                 Text("·")
-                Text("\(pane.selection.count) selected")
-                    .foregroundStyle(Color.orange)
-                if pane.selectedSize > 0 {
-                    Text("(\(ByteCountFormatter.string(fromByteCount: pane.selectedSize, countStyle: .file)))")
+                Text("\(pane.marked.count) marked")
+                    .foregroundStyle(Color.red)
+                if pane.markedSize > 0 {
+                    Text("(\(ByteCountFormatter.string(fromByteCount: pane.markedSize, countStyle: .file)))")
                 }
+            } else if !pane.selection.isEmpty {
+                Text("·")
+                Text("\(pane.selection.count) under cursor")
+                    .foregroundStyle(Color.orange)
             }
             Spacer()
             if pane.showHidden {
@@ -358,9 +373,10 @@ private extension View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(alignment: .center) {
                 if selected {
-                    PaneView.selectionTint
-                        .frame(height: 400)
-                        .padding(.horizontal, -40)
+                    // Height overflows deliberately and is clipped back to the
+                    // row. Width must NOT overflow: a neighbouring cell's band
+                    // is composited over this one and would hide its text.
+                    PaneView.selectionTint.frame(height: 400)
                 }
             }
     }
