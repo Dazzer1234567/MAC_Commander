@@ -139,6 +139,42 @@ final class TransferController: ObservableObject {
         return outcome
     }
 
+    /// Each archive lands in its own folder beside the others, rather than
+    /// spilling loose files into the destination.
+    func extract(archives: [URL], intoParent parent: URL) async -> TransferOutcome {
+        var outcome = TransferOutcome()
+        guard !archives.isEmpty else { return outcome }
+        cancelled = false
+
+        progress = TransferProgress(
+            title: "Extracting \(archives.count) archive\(archives.count == 1 ? "" : "s")…",
+            current: "",
+            completed: 0,
+            total: archives.count
+        )
+        defer { progress = nil }
+
+        for (index, archive) in archives.enumerated() {
+            if cancelled { break }
+            progress?.completed = index
+            progress?.current = archive.lastPathComponent
+
+            let target = Self.uniqueURL(
+                for: parent.appendingPathComponent(ArchiveService.baseName(of: archive)))
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try ArchiveService.extract(archive, into: target)
+                }.value
+                outcome.createdCopies.append(target)
+            } catch {
+                outcome.errors.append("\(archive.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+
+        progress?.completed = archives.count
+        return outcome
+    }
+
     func trash(_ urls: [URL]) -> [String] {
         var errors: [String] = []
         for url in urls {

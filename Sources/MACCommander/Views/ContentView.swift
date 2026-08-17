@@ -165,6 +165,8 @@ struct ContentView: View {
             }
         case .manageBookmarks:
             BookmarksSheet(store: state.bookmarks)
+        case .peekArchive(let item):
+            PeekSheet(item: item)
         }
     }
 }
@@ -180,6 +182,11 @@ struct CommandBar: View {
             key("Move", shortcut: "F6", alt: "⇧⌘M") { state.moveToOtherPane() }
             key("New Folder", shortcut: "F7", alt: "⇧⌘N") { state.sheet = .newFolder }
             key("Delete", shortcut: "F8", alt: "⌘⌫") { state.requestTrash() }
+            key("Peek", shortcut: "⌘Y") { state.peekArchive() }
+                .disabled(state.archiveToPeek == nil)
+                .help(state.archiveToPeek == nil
+                      ? "Select one archive to look inside it"
+                      : "Look inside \(state.archiveToPeek!.name) — ⌘Y")
             key("Link", shortcut: "⌘L") { state.linkActiveDirectory() }
             key("Path", shortcut: "⌥⌘P") { state.copySelectedNames() }
             key("Full", shortcut: "⌥⌘F") { state.copySelectedFullPaths() }

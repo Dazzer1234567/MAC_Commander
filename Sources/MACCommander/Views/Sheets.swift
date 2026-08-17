@@ -222,3 +222,85 @@ struct BookmarksSheet: View {
         }
     }
 }
+
+/// Shows the top level of an archive without extracting it or navigating into
+/// it. Anything nested is summarised as a child count rather than expanded.
+struct PeekSheet: View {
+    let item: FileItem
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var listing: ArchiveListing?
+    @State private var failure: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(nsImage: item.icon)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.name).font(.headline).lineLimit(1).truncationMode(.middle)
+                    Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
+
+            Group {
+                if let failure {
+                    ContentUnavailableView(
+                        "Can’t read this archive",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text(failure)
+                    )
+                } else if let listing {
+                    if listing.topLevel.isEmpty {
+                        ContentUnavailableView("Empty archive", systemImage: "archivebox")
+                    } else {
+                        List(listing.topLevel) { entry in
+                            HStack(spacing: 6) {
+                                Image(systemName: entry.isDirectory ? "folder.fill" : "doc")
+                                    .foregroundStyle(entry.isDirectory ? Color.accentColor : .secondary)
+                                Text(entry.name).lineLimit(1).truncationMode(.middle)
+                                Spacer(minLength: 0)
+                                if entry.isDirectory {
+                                    Text("\(entry.childCount) item\(entry.childCount == 1 ? "" : "s")")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .font(.system(size: 12))
+                        }
+                        .listStyle(.plain)
+                        .border(Color(nsColor: .separatorColor))
+                    }
+                } else {
+                    ProgressView("Reading…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(height: 280)
+
+            HStack {
+                Text("Top level only — nothing inside the folders is listed.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(18)
+        .frame(width: 480)
+        .task {
+            do {
+                listing = try await Task.detached(priority: .userInitiated) {
+                    try ArchiveService.listTopLevel(of: item.url)
+                }.value
+            } catch {
+                failure = error.localizedDescription
+            }
+        }
+    }
+
+    private var subtitle: String {
+        guard let listing else { return item.displaySize }
+        let top = listing.topLevel.count
+        return "\(item.displaySize) · \(top) at the top level · \(listing.totalEntries) in total"
+    }
+}

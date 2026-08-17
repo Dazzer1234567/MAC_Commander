@@ -14,6 +14,7 @@ enum SheetKind: Identifiable {
     case rename(FileItem)
     case confirmTrash([FileItem])
     case manageBookmarks
+    case peekArchive(FileItem)
 
     var id: String {
         switch self {
@@ -21,6 +22,7 @@ enum SheetKind: Identifiable {
         case .rename(let item): return "rename:\(item.url.path)"
         case .confirmTrash(let items): return "trash:\(items.count):\(items.first?.url.path ?? "")"
         case .manageBookmarks: return "bookmarks"
+        case .peekArchive(let item): return "peek:\(item.url.path)"
         }
     }
 }
@@ -163,6 +165,37 @@ final class AppState: ObservableObject {
             if !outcome.errors.isEmpty { errorReport = outcome.errors }
         }
         return true
+    }
+
+    // MARK: - Archives
+
+    var selectedArchives: [FileItem] { operands.filter { ArchiveService.isArchive($0.url) } }
+
+    var canExtract: Bool { !selectedArchives.isEmpty && !transfer.isRunning }
+
+    /// Peeking only makes sense for one archive at a time.
+    var archiveToPeek: FileItem? {
+        let archives = selectedArchives
+        return archives.count == 1 ? archives[0] : nil
+    }
+
+    func peekArchive() {
+        guard let archive = archiveToPeek else { return }
+        sheet = .peekArchive(archive)
+    }
+
+    func extractToOtherPane() {
+        let archives = selectedArchives.map(\.url)
+        guard !archives.isEmpty, !transfer.isRunning else { return }
+        let destination = inactive.directory
+        Task {
+            let outcome = await transfer.extract(archives: archives, intoParent: destination)
+            refreshBoth()
+            // Extraction only creates things, so undo removes them — exactly what
+            // the copy case already does.
+            if !outcome.createdCopies.isEmpty { push(.copy(outcome.createdCopies)) }
+            if !outcome.errors.isEmpty { errorReport = outcome.errors }
+        }
     }
 
     func requestTrash() {

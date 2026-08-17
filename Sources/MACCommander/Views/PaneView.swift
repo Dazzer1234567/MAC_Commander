@@ -289,6 +289,16 @@ struct PaneView: View {
             }
         } else {
             Button("Open") { pane.open(Array(urls)) }
+            if urls.count == 1, let only = urls.first, ArchiveService.isArchive(only) {
+                Button("Look Inside…") {
+                    focusedSide = side
+                    state.peekArchive()
+                }
+                Button("Extract to Other Pane") {
+                    focusedSide = side
+                    state.extractToOtherPane()
+                }
+            }
             Button("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting(Array(urls))
             }

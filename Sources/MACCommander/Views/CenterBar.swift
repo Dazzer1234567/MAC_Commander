@@ -35,6 +35,14 @@ struct CenterBar: View {
                 flipped: !pointsRight
             ) { state.moveToOtherPane() }
 
+            button(
+                systemImage: "arrow.up.bin",
+                title: "Unzip",
+                help: "Extract to the \(pointsRight ? "right" : "left") pane — ⌘E",
+                enabled: state.canExtract,
+                flipped: !pointsRight
+            ) { state.extractToOtherPane() }
+
             Divider().padding(.horizontal, 8)
 
             button(

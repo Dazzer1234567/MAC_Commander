@@ -78,6 +78,13 @@ struct AppCommands: Commands {
                     .keyboardShortcut(.delete, modifiers: .command)
             }
             Divider()
+            Button("Look Inside Archive…") { state.peekArchive() }
+                .keyboardShortcut("y", modifiers: .command)
+                .disabled(state.archiveToPeek == nil)
+            Button("Extract to Other Pane") { state.extractToOtherPane() }
+                .keyboardShortcut("e", modifiers: .command)
+                .disabled(!state.canExtract)
+            Divider()
             Button("Copy Name") { state.copySelectedNames() }
                 .keyboardShortcut("p", modifiers: [.command, .option])
             Button("Copy Full Path") { state.copySelectedFullPaths() }
