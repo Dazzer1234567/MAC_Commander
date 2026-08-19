@@ -110,7 +110,7 @@ struct PaneView: View {
                 .contentShape(Rectangle())
         }
         .disabled(!pane.canGoUp)
-        .help(pane.canGoUp ? "Up to \(pane.directory.deletingLastPathComponent().lastPathComponent)" : "Already at the top level")
+        .help(pane.canGoUp ? "Up one level" : "Already at the top level")
     }
 
     private func navButton(
@@ -147,16 +147,20 @@ struct PaneView: View {
     }
 
     private var breadcrumb: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        let crumbs = pane.crumbs
+        return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
-                ForEach(pane.ancestry, id: \.self) { url in
-                    Button(url.path == "/" ? "Macintosh HD" : url.lastPathComponent) {
-                        pane.navigate(to: url)
+                ForEach(crumbs) { crumb in
+                    let isLast = crumb.id == crumbs.count - 1
+                    if crumb.isArchive {
+                        Image(systemName: "archivebox.fill")
+                            .foregroundStyle(Color.accentColor)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(url == pane.directory ? Color.primary : Color.secondary)
-                    .fontWeight(url == pane.directory ? .semibold : .regular)
-                    if url != pane.directory {
+                    Button(crumb.label) { pane.go(to: crumb.target) }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(isLast ? Color.primary : Color.secondary)
+                        .fontWeight(isLast ? .semibold : .regular)
+                    if !isLast {
                         Image(systemName: "chevron.compact.right").foregroundStyle(.tertiary)
                     }
                 }
@@ -350,6 +354,10 @@ struct PaneView: View {
                     .foregroundStyle(Color.orange)
             }
             Spacer()
+            if pane.isInsideArchive {
+                Label("read-only", systemImage: "archivebox")
+                    .help("You are inside an archive. Items here can be copied out, but not changed.")
+            }
             if pane.showHidden {
                 Image(systemName: "eye").help("Hidden files are shown")
             }

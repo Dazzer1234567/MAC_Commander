@@ -96,6 +96,51 @@ enum ArchiveService {
         return ArchiveListing(topLevel: folders + plainFiles, totalEntries: total)
     }
 
+    /// Full table of contents, cached per archive so re-entering one is
+    /// instant. The cache key includes size and modification date, so editing
+    /// an archive on disk invalidates it.
+    private static var indexCache: [String: (stamp: String, index: ArchiveIndex)] = [:]
+    private static let cacheLock = NSLock()
+
+    static func index(of archive: URL) throws -> ArchiveIndex {
+        let values = try? archive.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        let stamp = "\(values?.fileSize ?? 0)-\(values?.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+
+        cacheLock.lock()
+        let cached = indexCache[archive.path]
+        cacheLock.unlock()
+        if let cached, cached.stamp == stamp { return cached.index }
+
+        let listing = try run(["-tvf", archive.path])
+        let built = ArchiveIndex(archive: archive, verboseListing: listing)
+
+        cacheLock.lock()
+        indexCache[archive.path] = (stamp, built)
+        cacheLock.unlock()
+        return built
+    }
+
+    /// Copies entries out of an archive. `strippingComponents` drops the inner
+    /// folders the user has navigated through, so copying "src/main.swift"
+    /// while inside "src" lands "main.swift" at the destination rather than
+    /// rebuilding the tree.
+    static func extractEntries(
+        _ paths: [String],
+        from archive: URL,
+        into folder: URL,
+        strippingComponents: Int
+    ) throws {
+        guard !paths.isEmpty else { return }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var arguments = ["-x", "-f", archive.path, "-C", folder.path]
+        if strippingComponents > 0 {
+            arguments += ["--strip-components", String(strippingComponents)]
+        }
+        arguments.append("--")
+        arguments += paths
+        _ = try run(arguments)
+    }
+
     static func extract(_ archive: URL, into folder: URL) throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         _ = try run(["-x", "-f", archive.path, "-C", folder.path])

@@ -96,15 +96,17 @@ final class AppState: ObservableObject {
     /// Gives both panes the same width.
     func fitPanes() { leftPaneWidth = nil }
 
+    /// Swapping carries the whole location, so a pane browsing an archive keeps
+    /// browsing it after the swap.
     func swapPanes() {
-        let leftDir = left.directory
-        let rightDir = right.directory
-        left.navigate(to: rightDir)
-        right.navigate(to: leftDir)
+        let leftLocation = left.location
+        let rightLocation = right.location
+        left.go(to: rightLocation)
+        right.go(to: leftLocation)
     }
 
     func syncOtherPaneToActive() {
-        inactive.navigate(to: active.directory)
+        inactive.go(to: active.location)
     }
 
     func refreshBoth() {
@@ -122,9 +124,22 @@ final class AppState: ObservableObject {
     func moveToOtherPane() { runTransfer(.move) }
 
     private func runTransfer(_ kind: TransferKind) {
+        guard !transfer.isRunning else { return }
+        guard let destination = inactive.writableDirectory else {
+            errorReport = ["The other pane is inside an archive. Archives here are read-only, so nothing can be written into one."]
+            return
+        }
+        if active.isInsideArchive {
+            guard kind == .copy else {
+                errorReport = ["Items inside an archive can be copied out, but not moved or deleted."]
+                return
+            }
+            copyOutOfArchive(to: destination)
+            return
+        }
+
         let sources = operands.map(\.url)
-        guard !sources.isEmpty, !transfer.isRunning else { return }
-        let destination = inactive.directory
+        guard !sources.isEmpty else { return }
         let source = active
         let target = inactive
         Task {
@@ -136,11 +151,27 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Copies whatever is marked out of the archive the active pane is browsing.
+    private func copyOutOfArchive(to destination: URL) {
+        guard case .archive(let archive, let inner) = active.location else { return }
+        let paths = operands.compactMap(\.archivePath)
+        guard !paths.isEmpty else { return }
+        let depth = inner.isEmpty ? 0 : inner.split(separator: "/").count
+        let target = inactive
+        Task {
+            let outcome = await transfer.copyOut(
+                paths: paths, from: archive, strippingComponents: depth, to: destination)
+            target.reload()
+            record(outcome)
+            if !outcome.errors.isEmpty { errorReport = outcome.errors }
+        }
+    }
+
     /// Dropping onto a pane moves the files into the folder that pane is showing.
     @discardableResult
     func handleDrop(_ urls: [URL], into side: Side) -> Bool {
         guard !transfer.isRunning else { return false }
-        let destination = pane(side).directory
+        guard let destination = pane(side).writableDirectory else { return false }
         let origin = pane(side.other)
 
         // Finder-style: dragging one row of a multi-row selection drags them all.
@@ -169,7 +200,9 @@ final class AppState: ObservableObject {
 
     // MARK: - Archives
 
-    var selectedArchives: [FileItem] { operands.filter { ArchiveService.isArchive($0.url) } }
+    var selectedArchives: [FileItem] {
+        operands.filter { !$0.isVirtual && ArchiveService.isArchive($0.url) }
+    }
 
     var canExtract: Bool { !selectedArchives.isEmpty && !transfer.isRunning }
 
@@ -187,7 +220,10 @@ final class AppState: ObservableObject {
     func extractToOtherPane() {
         let archives = selectedArchives.map(\.url)
         guard !archives.isEmpty, !transfer.isRunning else { return }
-        let destination = inactive.directory
+        guard let destination = inactive.writableDirectory else {
+            errorReport = ["The other pane is inside an archive, so there is nowhere to extract to."]
+            return
+        }
         Task {
             let outcome = await transfer.extract(archives: archives, intoParent: destination)
             refreshBoth()
@@ -201,6 +237,10 @@ final class AppState: ObservableObject {
     func requestTrash() {
         let items = operands
         guard !items.isEmpty else { return }
+        guard !active.isInsideArchive else {
+            errorReport = ["Items inside an archive cannot be deleted. Extract the archive first."]
+            return
+        }
         sheet = .confirmTrash(items)
     }
 
@@ -213,6 +253,10 @@ final class AppState: ObservableObject {
 
     func requestRename() {
         guard let item = operands.first else { return }
+        guard !item.isVirtual else {
+            errorReport = ["Items inside an archive cannot be renamed. Extract the archive first."]
+            return
+        }
         sheet = .rename(item)
     }
 
@@ -233,7 +277,11 @@ final class AppState: ObservableObject {
     func performNewFolder(named name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !trimmed.contains("/") else { return }
-        let destination = active.directory.appendingPathComponent(trimmed)
+        guard let folder = active.writableDirectory else {
+            errorReport = ["A folder cannot be created inside an archive."]
+            return
+        }
+        let destination = folder.appendingPathComponent(trimmed)
         do {
             try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
             active.reload()
@@ -267,7 +315,11 @@ final class AppState: ObservableObject {
 
     /// Pins the folder the active pane is currently showing to the top bar.
     func linkActiveDirectory() {
-        links.add(active.directory)
+        guard let folder = active.writableDirectory else {
+            errorReport = ["A folder inside an archive cannot be pinned, because it only exists while the archive is open."]
+            return
+        }
+        links.add(folder)
     }
 
     // MARK: - Undo

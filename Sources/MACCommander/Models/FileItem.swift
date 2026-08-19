@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
 
 /// One row in a pane: a single directory entry with the metadata we display.
 struct FileItem: Identifiable, Hashable {
@@ -12,6 +13,14 @@ struct FileItem: Identifiable, Hashable {
     let size: Int64
     let modified: Date
 
+    /// True for rows that describe an entry inside an archive rather than a
+    /// file on disk. Their `url` is an identifier, not something that can be
+    /// opened, so anything touching the filesystem must check this first.
+    let isVirtual: Bool
+
+    /// Path within the archive, for virtual rows only.
+    let archivePath: String?
+
     var id: URL { url }
 
     /// Packages (.app, .rtfd) look like folders on disk but should open, not descend.
@@ -21,6 +30,22 @@ struct FileItem: Identifiable, Hashable {
         .nameKey, .isDirectoryKey, .isPackageKey, .isSymbolicLinkKey,
         .isHiddenKey, .fileSizeKey, .contentModificationDateKey,
     ]
+
+    /// A row standing for an entry inside an archive. The URL is synthesised
+    /// as archive-path + inner-path: it never exists on disk, but it is stable
+    /// and unique, which is all the table needs for identity and selection.
+    init(node: ArchiveNode, in archive: URL) {
+        self.url = URL(fileURLWithPath: archive.path + "/" + node.path)
+        self.name = node.name
+        self.isDirectory = node.isDirectory
+        self.isPackage = false
+        self.isSymlink = false
+        self.isHidden = node.name.hasPrefix(".")
+        self.size = node.size
+        self.modified = node.modified
+        self.isVirtual = true
+        self.archivePath = node.path
+    }
 
     init?(url: URL) {
         guard let v = try? url.resourceValues(forKeys: Set(FileItem.resourceKeys)) else { return nil }
@@ -32,6 +57,8 @@ struct FileItem: Identifiable, Hashable {
         self.isHidden = v.isHidden ?? false
         self.size = Int64(v.fileSize ?? 0)
         self.modified = v.contentModificationDate ?? .distantPast
+        self.isVirtual = false
+        self.archivePath = nil
     }
 }
 
@@ -45,7 +72,17 @@ extension FileItem {
     }
 
     var icon: NSImage {
-        let image = NSWorkspace.shared.icon(forFile: url.path)
+        // Virtual rows have no file to ask about, so the icon comes from the
+        // name's type instead of the path.
+        let image: NSImage
+        if isVirtual {
+            let type = isDirectory
+                ? UTType.folder
+                : (UTType(filenameExtension: url.pathExtension) ?? .data)
+            image = NSWorkspace.shared.icon(for: type)
+        } else {
+            image = NSWorkspace.shared.icon(forFile: url.path)
+        }
         image.size = NSSize(width: 16, height: 16)
         return image
     }

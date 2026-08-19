@@ -175,6 +175,49 @@ final class TransferController: ObservableObject {
         return outcome
     }
 
+    /// Copying out of an archive extracts to a staging folder first, then hands
+    /// the real files to the normal copy path. That is a little more work than
+    /// unpacking straight into the destination, but it means copying out gets
+    /// the same conflict dialog, progress and undo as any other copy instead of
+    /// silently overwriting whatever is already there.
+    func copyOut(
+        paths: [String],
+        from archive: URL,
+        strippingComponents: Int,
+        to destination: URL
+    ) async -> TransferOutcome {
+        var outcome = TransferOutcome()
+        guard !paths.isEmpty else { return outcome }
+
+        let staging = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("MACCommander-staging-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: staging) }
+
+        progress = TransferProgress(
+            title: "Reading \(paths.count) item\(paths.count == 1 ? "" : "s") from \(archive.lastPathComponent)…",
+            current: "", completed: 0, total: 1
+        )
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try ArchiveService.extractEntries(paths, from: archive, into: staging,
+                                                  strippingComponents: strippingComponents)
+            }.value
+        } catch {
+            progress = nil
+            outcome.errors.append("\(archive.lastPathComponent): \(error.localizedDescription)")
+            return outcome
+        }
+        progress = nil
+
+        let staged = (try? FileManager.default.contentsOfDirectory(
+            at: staging, includingPropertiesForKeys: nil)) ?? []
+        guard !staged.isEmpty else {
+            outcome.errors.append("Nothing was read out of \(archive.lastPathComponent).")
+            return outcome
+        }
+        return await run(kind: .copy, sources: staged, destination: destination)
+    }
+
     func trash(_ urls: [URL]) -> [String] {
         var errors: [String] = []
         for url in urls {

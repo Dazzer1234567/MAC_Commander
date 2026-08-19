@@ -77,9 +77,19 @@ self-signed. `build.sh` finds it by name.
 - Panes auto-refresh when their folder changes on disk, so a copy shows up in
   the other pane immediately.
 
+- **Browse inside archives.** Press Return or double-click a zip (or tar.gz, 7z,
+  iso, rar…) and the pane steps into it, listing its contents with real sizes and
+  dates. Descend through folders, use the breadcrumb, filter, mark with Space —
+  it behaves like any other folder. Going up walks back out into the folder
+  holding the archive.
+
+  Nothing is unpacked to do this: the listing comes from the archive's table of
+  contents, so opening a large archive is immediate rather than a wait. Archives
+  are **read-only** here — copy out with F5, but rename, delete, move and New
+  Folder are refused with an explanation. Opening a file inside one extracts a
+  throwaway copy to open, so edits do not travel back into the archive.
 - **Look inside an archive** (`⌘Y`, or the Peek button) lists its top level
-  without extracting or navigating into it. Folders show an immediate child
-  count rather than expanding, so you see the shape of a zip at a glance.
+  without stepping into it — a glance rather than a visit.
 - **Extract** (`⌘E`, or Unzip in the centre strip) unpacks the marked archives
   into the other pane, each into its own folder named after the archive, so
   nothing spills loose. Undo removes what it created.
@@ -87,9 +97,9 @@ self-signed. `build.sh` finds it by name.
 Archive support is `bsdtar`, which ships with macOS: zip, tar and its compressed
 variants, 7z, iso, and rar read-only. No third-party dependency.
 
-Deliberately not included: *browsing* inside archives as if they were folders,
-creating archives, FTP/SFTP, multi-rename, file compare, tabs, a built-in viewer
-or editor.
+Deliberately not included: writing into archives (creating them, or adding to
+one), nested archives opened in place, FTP/SFTP, multi-rename, file compare,
+tabs, a built-in viewer or editor.
 
 ## Known gaps
 
@@ -157,7 +167,8 @@ Sources/MACCommander/
     AppState.swift       the two panes, which one is active, the file commands
     Transfer.swift       copy/move/trash engine, conflict resolution, progress
     Bookmarks.swift      bookmark list, persisted to UserDefaults
-    ArchiveService.swift bsdtar wrapper: top-level listing and extraction
+    ArchiveService.swift bsdtar wrapper: listing, indexing, extraction
+    ArchiveIndex.swift   an archive's table of contents, bucketed by folder
   Views/
     ContentView.swift    window layout, F-key bar, progress bar, sheet routing
     PaneView.swift       one pane: breadcrumb, filter, file table, footer
