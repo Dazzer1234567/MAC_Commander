@@ -92,28 +92,31 @@ struct ContentView: View {
     }
 
     private var quickBar: some View {
-        HStack(spacing: 6) {
-            Button {
-                state.active.navigate(to: FileManager.default.homeDirectoryForCurrentUser
-                    .appendingPathComponent("Downloads"))
-            } label: {
-                Label("Downloads", systemImage: "arrow.down.circle")
-            }
-            .help("Show Downloads in the \(state.activeSide == .left ? "left" : "right") pane")
+        // Zero-length spacers centre the row when it fits and collapse when it
+        // does not, so a long list of links keeps the full width instead of
+        // being pushed off the edge.
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
 
-            if !state.links.items.isEmpty {
-                Divider().frame(height: 16)
-            }
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(state.links.items) { link in
-                        linkButton(link)
-                    }
+            HStack(spacing: 6) {
+                Button {
+                    state.active.navigate(to: FileManager.default.homeDirectoryForCurrentUser
+                        .appendingPathComponent("Downloads"))
+                } label: {
+                    Label("Downloads", systemImage: "arrow.down.circle")
                 }
-                .padding(.trailing, 4)
+                .help("Show Downloads in the \(state.activeSide == .left ? "left" : "right") pane")
+
+                if !state.links.items.isEmpty {
+                    Divider().frame(height: 16)
+                }
+
+                ForEach(state.links.items) { link in
+                    linkButton(link)
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Spacer(minLength: 0)
         }
         .controlSize(.regular)
         .padding(.horizontal, 8)
