@@ -206,18 +206,30 @@ struct PaneView: View {
 
     private var fileTable: some View {
         Table(pane.items, selection: $pane.selection, sortOrder: $pane.sortOrder) {
-            TableColumn("Name", value: \.name) { item in
+            TableColumn("Name", value: \.baseName) { item in
                 HStack(spacing: 5) {
                     Image(nsImage: item.icon)
-                    Text(item.name)
+                    Text(item.baseName)
                         .foregroundStyle(textColor(for: item, dim: item.isHidden))
                         .fontWeight(pane.marked.contains(item.url) ? .semibold : .regular)
                         .italic(item.isSymlink)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                     Spacer(minLength: 0)
                 }
                 .rowHighlight(selected: pane.selection.contains(item.url))
             }
-            .width(min: 140, ideal: 260)
+            .width(min: 120, ideal: 240)
+
+            // Its own column so a long name can truncate without hiding what
+            // kind of file it is.
+            TableColumn("Ext", value: \.ext) { item in
+                Text(item.ext)
+                    .foregroundStyle(textColor(for: item, dim: true))
+                    .lineLimit(1)
+                    .rowHighlight(selected: pane.selection.contains(item.url))
+            }
+            .width(min: 36, ideal: 52, max: 90)
 
             TableColumn("Size", value: \.size) { item in
                 Text(item.displaySize)

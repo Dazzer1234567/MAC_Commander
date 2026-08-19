@@ -73,6 +73,11 @@ self-signed. `build.sh` finds it by name.
 - The big red arrow on the right of each pane header goes **up one level**, every
   press, until it greys out at the top level. It ignores history on purpose, so
   it can never bounce between two folders.
+- **The extension has its own column**, so a long filename can truncate in the
+  middle while you can still always see that it is a `wav`. The Name column
+  therefore shows the name without its extension. Folders and files with no
+  extension leave the column empty, and a dotfile like `.gitignore` keeps its
+  whole name. Click the Ext header to group by type.
 - Folders always sort above files; click a column header to change the sort.
 - Panes auto-refresh when their folder changes on disk, so a copy shows up in
   the other pane immediately.

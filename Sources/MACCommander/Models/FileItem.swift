@@ -63,6 +63,19 @@ struct FileItem: Identifiable, Hashable {
 }
 
 extension FileItem {
+    /// Extension shown in its own column. Folders have none; packages like .app
+    /// do, since they behave as files here.
+    var ext: String {
+        navigable ? "" : url.pathExtension
+    }
+
+    /// The name with the extension taken off, so the Name column spends its
+    /// width on the part that actually distinguishes one file from another.
+    /// A dotfile such as ".gitignore" has no extension and keeps its full name.
+    var baseName: String {
+        ext.isEmpty ? name : String(name.dropLast(ext.count + 1))
+    }
+
     var displaySize: String {
         navigable ? "—" : ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
     }
