@@ -94,13 +94,12 @@ struct ContentView: View {
     private var quickBar: some View {
         HStack(spacing: 6) {
             Button {
-                state.left.navigate(to: FileManager.default.homeDirectoryForCurrentUser
+                state.active.navigate(to: FileManager.default.homeDirectoryForCurrentUser
                     .appendingPathComponent("Downloads"))
-                focusedSide = .left
             } label: {
                 Label("Downloads", systemImage: "arrow.down.circle")
             }
-            .help("Show Downloads in the left pane")
+            .help("Show Downloads in the \(state.activeSide == .left ? "left" : "right") pane")
 
             if !state.links.items.isEmpty {
                 Divider().frame(height: 16)
@@ -122,8 +121,10 @@ struct ContentView: View {
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    /// A folder pinned with the Link button. Clicking it walks the active pane
-    /// back into that folder.
+    /// A folder pinned with the Link button. Like every shortcut in this bar it
+    /// targets whichever pane is active, rather than a fixed side — clicking a
+    /// shortcut never moves the focus, so the pane you were working in is the
+    /// one that navigates.
     private func linkButton(_ link: Bookmark) -> some View {
         Button {
             state.active.navigate(to: link.url)
@@ -131,7 +132,7 @@ struct ContentView: View {
             Label(link.name, systemImage: "folder.fill")
                 .lineLimit(1)
         }
-        .help("Go to \(link.path)")
+        .help("Show \(link.path) in the \(state.activeSide == .left ? "left" : "right") pane")
         .contextMenu {
             Button("Remove Link") { state.links.remove(link) }
             Button("Remove All Links") { state.links.removeAll() }

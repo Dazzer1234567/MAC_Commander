@@ -42,11 +42,12 @@ self-signed. `build.sh` finds it by name.
 ## What it does
 
 - **Two independent panes**, each with its own history, sort order and filter.
-- **A Downloads button** in the top bar that jumps the left pane straight there.
+- **Shortcuts in the top bar** — a Downloads button plus your links. They all
+  open in whichever pane is active, and clicking one never steals the focus, so
+  the pane you were working in is the one that moves.
 - **Link** (`⌘L`, or the button in the bottom bar) pins whichever folder the
-  active pane is currently showing to the top bar. Click that link later and the
-  active pane goes straight back into it. Links survive restarts; right-click one
-  to remove it.
+  active pane is currently showing to the top bar. Links survive restarts;
+  right-click one to remove it.
 - **Drop files onto a pane to move them there**, from Finder or another app. The
   pane outlines itself while you hover, and the same conflict dialog applies.
   Dragging *between* the two panes is not wired up — see Known gaps.
