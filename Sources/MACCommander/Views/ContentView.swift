@@ -99,9 +99,46 @@ struct WindowSetup: NSViewRepresentable {
             window.title = "MAC Commander — \(state.active.currentPath)"
             window.tabbingMode = .disallowed
             state.active.focusRequest += 1
+            WindowSetup.watchThumbButtons(window, state: state)
             WindowSetup.snapshotIfAsked(window)
         }
         return view
+    }
+
+    /// The mouse's thumb buttons: back goes up a level, forward goes into the highlighted
+    /// folder. They act on the pane being pointed at, making it active, and fall back to
+    /// the active pane when the pointer is anywhere else. Handled for the whole window, so
+    /// the two panes cannot both fire.
+    static func watchThumbButtons(_ window: NSWindow, state: AppState) {
+        NSEvent.addLocalMonitorForEvents(matching: .otherMouseDown) { [weak window, weak state] event in
+            guard let window, let state, event.window === window,
+                  event.buttonNumber == 3 || event.buttonNumber == 4 else { return event }
+            let point = event.locationInWindow
+            var side = state.activeSide
+            if let content = window.contentView {
+                // The pane whose column the pointer is in: left of the centre strip is left.
+                let tables = allTables(in: content).compactMap { $0.enclosingScrollView }
+                    .map { $0.convert($0.bounds, to: nil) }
+                if tables.count == 2 {
+                    let sorted = tables.sorted { $0.minX < $1.minX }
+                    if point.x <= sorted[0].maxX + 2 { side = .left } else if point.x >= sorted[1].minX - 2 { side = .right }
+                } else if let only = tables.first, only.minX - 2 ... only.maxX + 2 ~= point.x {
+                    side = point.x < window.frame.width / 2 ? .left : .right
+                }
+            }
+            let pane = state.pane(side)
+            state.setActive(side)
+            if event.buttonNumber == 3 { pane.goUp() } else { pane.enterHighlightedDirectory() }
+            pane.focusRequest += 1
+            return nil
+        }
+    }
+
+    private static func allTables(in view: NSView) -> [FileTable] {
+        var found: [FileTable] = []
+        if let table = view as? FileTable { found.append(table) }
+        for sub in view.subviews { found += allTables(in: sub) }
+        return found
     }
 
     /// For checking the layout without a screen: `open --env MACC_SNAPSHOT=/tmp/x.png`

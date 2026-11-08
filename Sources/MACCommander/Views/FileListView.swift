@@ -452,22 +452,6 @@ final class FileTable: NSTableView {
 
     override func menu(for event: NSEvent) -> NSMenu? { nil }
 
-    /// The mouse's thumb buttons: back goes up a level, forward goes into the highlighted
-    /// folder - never launching a file, so a stray click cannot start a program.
-    override func otherMouseDown(with event: NSEvent) {
-        guard let pane else { return }
-        switch event.buttonNumber {
-        case 3:
-            pane.activate()
-            pane.goUp()
-        case 4:
-            pane.activate()
-            pane.enterHighlightedDirectory()
-        default:
-            super.otherMouseDown(with: event)
-        }
-    }
-
     // MARK: Hover
 
     override func updateTrackingAreas() {
