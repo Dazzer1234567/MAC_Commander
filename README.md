@@ -1,184 +1,303 @@
 # MAC Commander
 
-A deliberately small dual-pane file browser for macOS, in the spirit of Total
-Commander. Native SwiftUI, no dependencies.
+A dual-pane file manager for macOS in the Total Commander tradition — the Mac
+counterpart of [DAZ Commander](https://github.com/Dazzer1234567/DAZ_Commander), with
+the same features and interface. Native SwiftUI and AppKit, no dependencies.
 
 ## Build and run
 
 ```sh
 ./build.sh run      # build + launch
 ./build.sh          # release build only, produces "MAC Commander.app"
-./build.sh debug     # faster build for iterating
+./build.sh debug    # faster build for iterating
 ```
 
-You can also `open Package.swift` to work on it in Xcode.
+You can also `open Package.swift` to work on it in Xcode. Drag the `.app` to
+`/Applications` to keep it.
 
-The result is a normal `MAC Commander.app` — drag it to `/Applications` if you
-want to keep it.
+### Stopping the "would like to access your Downloads folder" prompt
 
-## Stopping the "would like to access your Downloads folder" prompt
+macOS asks once per app identity, and an ad-hoc signature changes with every build. Run
+`./make-signing-cert.sh` once: it creates a self-signed code-signing certificate called
+"MAC Commander Local", which `build.sh` then signs with, so the identity stays the same
+across rebuilds.
 
-macOS asks once per app identity. An ad-hoc signature — the fallback this
-project uses — identifies an app by the hash of its binary, and that hash
-changes on every rebuild, so each build looks like a brand-new app and gets
-asked all over again.
+### Function keys
 
-Run this once to fix it for good:
+macOS keeps F5, F6 and friends for itself unless *System Settings ▸ Keyboard ▸ Keyboard
+Shortcuts ▸ Function Keys ▸ "Use F1, F2, etc. keys as standard function keys"* is on, or
+`fn` is held. Every function key therefore also has a ⌘ twin: **⌘ plus the digit**
+(⌘5 = F5, ⌘6 = F6, ⌘7 = F7, …) and ⌥⌘ for the ⌥ ones (⌥⌘5 = ⌥F5 pack).
 
-```sh
-./make-signing-cert.sh
+## The window
+
+From top to bottom, as in DAZ Commander:
+
+```
+┌ workspace picker │ shortcut buttons …                │ + ⇩ ⇧ 🔍 ✎ ⚙ ┐   workspace toolbar
+├ (extra rows of shortcuts, each with a − to remove it)               ┤
+├ saved pane layouts …                                             + ┤   layout bar
+├──────────────── left pane ────────┬─┬──────── right pane ─────────┤
+│ drive list   free space       U   │V│ …                            │
+│ path box                          │=│                              │
+│ Name        Ext  Size  Date  Attr │↓│                              │   centre strip
+│ ..                                │T│                              │
+│ …                                 │P│                              │
+│ status: files, dirs, selection    │…│                              │
+├───────────────────────────────────┴─┴──────────────────────────────┤
+│ /current/folder> command line                                       │
+│ F3 View  F4 Edit  F5 Copy  F6 Move  F7 NewDir  F8 Delete  ⌘Q Exit   │
 ```
 
-It creates a self-signed code-signing certificate called "MAC Commander Local"
-in your keychain. It asks for your login password (to import the key) and an
-admin password (to trust it for code signing). `build.sh` then signs with that
-identity instead of ad-hoc, the identity stays the same across rebuilds, and you
-grant folder access one final time.
+Colours come in **dark** and **light** (Settings ▸ Colours), DAZ Commander's palettes
+exactly. **Interface size** (Settings ▸ Interface Size, ⌘+ / ⌘- / ⌘0) scales everything —
+text, icons, buttons, panes and dialogs — from 75% to 200% in steps of 25%; everything is
+laid out afresh at the new size rather than magnified, so text stays sharp.
 
-If you would rather do it by hand: Keychain Access ▸ Certificate Assistant ▸
-Create a Certificate, name it `MAC Commander Local`, type "Code Signing",
-self-signed. `build.sh` finds it by name.
+Everything is remembered in `~/Library/Application Support/MACCommander/settings.json`,
+written half a second after each change, so a crash or a kill loses nothing. A file that
+cannot be read is kept as `settings.json.bad` rather than overwritten.
 
-## What it does
+## Panes
 
-- **Two independent panes**, each with its own history, sort order and filter.
-- **Shortcuts in the top bar** — a Downloads button plus your links. They all
-  open in whichever pane is active, and clicking one never steals the focus, so
-  the pane you were working in is the one that moves.
-- **Link** (`⌘L`, or the button in the bottom bar) pins whichever folder the
-  active pane is currently showing to the top bar. Links survive restarts;
-  right-click one to remove it.
-- **Drop files onto a pane to move them there**, from Finder or another app. The
-  pane outlines itself while you hover, and the same conflict dialog applies.
-  Dragging *between* the two panes is not wired up — see Known gaps.
-- **Copy and move between panes** with a conflict dialog (Replace / Skip / Keep
-  Both, with "apply to all"). Transfers run off the main thread with a progress
-  bar and a Cancel button.
-- **Undo** (`⌘Z`, or the button in the bottom bar) reverses the last copy, move,
-  drag-drop or rename, and keeps going back through the last 20. Undoing a move
-  or rename puts the file back where it was; undoing a copy trashes the copy it
-  made. It refuses to overwrite anything that has appeared at the original
-  location in the meantime, and says so instead.
-- **Delete to Trash** — never a permanent unlink, so mistakes are recoverable.
-  Choosing Replace in the conflict dialog also trashes the file it replaces
-  rather than deleting it.
-- **Rename** and **New Folder**.
-- **Quick filter** per pane (⌘F) that narrows the list as you type.
-- **Path** copies just the name of what you have selected (`report.pdf`), and
-  **Full** copies the whole path from the disk root
-  (`/Users/you/Downloads/report.pdf`). With several rows selected you get one per
-  line; with nothing selected you get the folder the pane is showing.
-- **Bookmarks** — per-pane menu, the Go menu, and a manage sheet you can
-  reorder. Stored in `UserDefaults`.
-- The big red arrow on the right of each pane header goes **up one level**, every
-  press, until it greys out at the top level. It ignores history on purpose, so
-  it can never bounce between two folders.
-- **The extension has its own column**, so a long filename can truncate in the
-  middle while you can still always see that it is a `wav`. The Name column
-  therefore shows the name without its extension. Folders and files with no
-  extension leave the column empty, and a dotfile like `.gitignore` keeps its
-  whole name. Click the Ext header to group by type.
-- Folders always sort above files; click a column header to change the sort.
-- Panes auto-refresh when their folder changes on disk, so a copy shows up in
-  the other pane immediately.
+Each pane has a **drive list** (this Mac's volumes, then the Tailscale computers — see
+[Other computers](#other-computers)), the free space on its volume, a **U** button for up
+one level, an editable **path box** (Enter goes there, Esc puts it back; `~` works, and so
+does a path running on into an archive), the file list, and a status line: files, folders,
+total size, then what is selected. The active pane is outlined in blue.
 
-- **Browse inside archives.** Press Return or double-click a zip (or tar.gz, 7z,
-  iso, rar…) and the pane steps into it, listing its contents with real sizes and
-  dates. Descend through folders, use the breadcrumb, filter, mark with Space —
-  it behaves like any other folder. Going up walks back out into the folder
-  holding the archive.
+**Listing** — name, extension, size, date and attributes (`r` read-only, `h` hidden,
+`l` link, `x` executable) in sortable columns: click a header to sort, again to reverse.
+`..` always sits at the top, folders above files, and names sort the way the Finder sorts
+them, so `file9` comes before `file10`. Apps (`.app`) are shown as files: they open.
 
-  Nothing is unpacked to do this: the listing comes from the archive's table of
-  contents, so opening a large archive is immediate rather than a wait. Archives
-  are **read-only** here — copy out with F5, but rename, delete, move and New
-  Folder are refused with an explanation. Opening a file inside one extracts a
-  throwaway copy to open, so edits do not travel back into the archive.
-- **Look inside an archive** (`⌘Y`, or the Peek button) lists its top level
-  without stepping into it — a glance rather than a visit.
-- **Extract** (`⌘E`, or Unzip in the centre strip) unpacks the marked archives
-  into the other pane, each into its own folder named after the archive, so
-  nothing spills loose. Undo removes what it created.
+**Type to filter** — typing letters narrows the pane to entries whose name starts with
+them, and puts the cursor on the **most recently modified folder** among them (with no
+folder left, the newest file), so Enter goes straight in. Backspace deletes a letter, Esc
+clears it. Commands act only on rows the filter is showing.
 
-Archive support is `bsdtar`, which ships with macOS: zip, tar and its compressed
-variants, 7z, iso, and rar read-only. No third-party dependency.
+**Selection** is Total Commander's: marking is separate from the cursor. Marked entries
+turn red and stay marked while the cursor moves. Every command acts on the marked entries,
+or on the one under the cursor when nothing is marked.
 
-Deliberately not included: writing into archives (creating them, or adding to
-one), nested archives opened in place, FTP/SFTP, multi-rename, file compare,
-tabs, a built-in viewer or editor.
+**Live** — a pane follows its folder as it changes on disk, keeping marks, cursor and
+filter, and both panes catch up whenever the app comes back to the front.
 
-## Known gaps
+**Long operations go to the background.** Copying, moving, deleting, packing and
+unpacking show a small box in the bottom-right corner — the file being worked on, a bar,
+how many are done, the percentage in its title — but only once the operation has run for
+0.4 seconds. The boxes never take the keyboard, stack upwards when several run at once,
+can be dragged by their title, and have their own Cancel. When one finishes, the listings
+catch up quietly; only an operation too quick to show a box lands the cursor on what it
+made.
 
-- **Dragging rows between the panes.** Attaching SwiftUI's `.draggable` to table
-  rows made ordinary clicking unreliable and stopped double-click from opening
-  folders, because the drag recognizer competes with the table's own click
-  handling. It was removed to keep clicking solid. Doing this properly needs an
-  AppKit `NSTableView` drag source rather than the SwiftUI modifier. Use F6 /
-  ⇧⌘M to move in the meantime.
-A single click on the inactive pane activates the pane *and* selects the row you
-clicked. See `PaneClickWatcher.swift` for why that needs an event monitor rather
-than a gesture.
+## Keys
 
-## Keyboard
+| Key | Action |
+| --- | --- |
+| `Tab` | Switch pane |
+| `Return` | Open folder or archive, or open the file |
+| `Backspace` | Delete a filter letter, or go up a level |
+| `Space` | Mark / unmark the entry under the cursor |
+| `Insert` (Help) | Mark and move down |
+| `⌘A` | Mark all |
+| `*`, `+`, `-` on the keypad | Invert marks; mark / unmark by wildcard (`*.txt;*.log`). Also ⌥⌘I, ⌥⌘=, ⌥⌘- |
+| `Esc` | Clear the filter, then the marks |
+| *letters* | Filter to entries starting with them |
+| `F3` | View (text or hex) |
+| `F4` | Open in the editor (TextEdit unless `editor` is changed in settings.json) |
+| `F5` / `F6` | Copy / move to the other pane. The box offers the destination; a full path for one item copies and renames |
+| `⌥F5` / `⌥F9` | Pack into a zip file / unpack |
+| `⌥F7` | Find files |
+| `F2`, `⇧F6` | Rename in place, name selected but not the extension |
+| `F7` | New folder, named after the folder under the cursor, fully selected |
+| `F8`, `⌦` | Delete to the Trash |
+| `⇧F8`, `⇧⌦` | Delete permanently |
+| `⌥Return` | Get Info |
+| `⌥F1` / `⌥F2` | Drive list of the left / right pane |
+| `⌘←` / `⌘→` | Show the highlighted folder in the other pane |
+| `⌘U` | Swap panes |
+| `⌘R` | Refresh both panes |
+| `⌘H`, `⇧⌘.` | Show hidden files |
+| `⌘+` / `⌘-` / `⌘0` | Interface bigger / smaller / 100% |
+| `⌘M` | Multi-rename tool |
+| `⇧⌘C` | Terminal in the active pane's folder |
+| `⇧⌘E` | The active folder in the Finder |
+| `⌘Z` | Undo the last copy, move or rename (up to 20) |
+| `⌘[` / `⌘]` | Back / forward through the pane's history |
+| `⌘Y` | Look inside an archive without going in |
+| `⌘D` / `⌘L` | Bookmark this folder / add it to the toolbar |
+| `⌥⌘P` / `⌥⌘F` | Copy name / full path |
 
-Every command lives in the menus too, so nothing is keyboard-only.
+⌘H and ⌘M are taken from the system's Hide and Minimize, as Ctrl+H and Ctrl+M are in DAZ
+Commander; Hide is still in the app menu and Minimize in the Window menu.
 
-| Action | Shortcut | Alternate |
-| --- | --- | --- |
-| Switch pane | `Tab` | `⌘\` |
-| Enter folder / open file | `Return` | `⌘↓` |
-| Enclosing folder | `Delete` | `⌘↑`, or the red arrow in the pane header |
-| Back / Forward through history | `⌘[` / `⌘]` | |
-| Undo last copy / move / rename | `⌘Z` | |
-| Rename | `F2` | `⇧⌘E` |
-| Copy to other pane | `F5` | `⇧⌘C` |
-| Move to other pane | `F6` | `⇧⌘M` |
-| New folder | `F7` | `⇧⌘N` |
-| Move to Trash | `F8` | `⌘⌫` |
-| Filter this folder | `⌘F` | |
-| Select all / invert / none | `⌘A` / `⇧⌘A` / `⇧⌘D` |
-| Show hidden files | `⇧⌘.` | |
-| Swap panes | `⌘U` | |
-| Point other pane here | `⇧⌘=` | |
-| Bookmark this folder | `⌘D` | |
-| Link this folder to the top bar | `⌘L` | |
-| Reveal in Finder | `⇧⌘R` | |
-| Open Terminal here | `⇧⌘T` | |
-| Look inside an archive | `⌘Y` | |
-| Extract to other pane | `⌘E` | |
-| Copy name only ("Path" button) | `⌥⌘P` | |
-| Copy full path ("Full" button) | `⌥⌘F` | |
-| Refresh both panes | `⌘R` | |
+The **command line** runs in the active pane's folder: `cd <path>` moves the pane,
+anything else runs in Terminal.
 
-### About the function keys
+## Mouse
 
-By default macOS keeps F5, F6 and friends for itself (dictation, Do Not
-Disturb), so they never reach the app. Two ways around it:
+| | |
+| --- | --- |
+| Double-click | Open folder or archive, or open the file |
+| Click, pause, click | **Rename in place**, caret where the second click landed. Return renames; Esc or clicking elsewhere abandons it |
+| Right-click | Mark the row — not a menu |
+| `⌘`-click | Toggle the mark on one row |
+| `⇧`-click | Mark everything between the cursor and the click |
+| Drag to the other pane | **Copy** into the folder it shows, or the folder row it is dropped on. No dialog |
+| `⌘`-drag | **Move** instead; what counts is whether ⌘ is held at the drop |
+| Thumb buttons | Back goes up a level, forward goes into the highlighted folder, in the pane under the pointer |
 
-- Hold `fn` — `fn`+`F5` works as F5, or
-- turn on *System Settings ▸ Keyboard ▸ Keyboard Shortcuts ▸ Function Keys ▸
-  "Use F1, F2, etc. keys as standard function keys"*.
+Files can be dragged to and from the Finder too.
 
-If you would rather not touch that setting, the alternates in the table above do
-the same jobs.
+While renaming, the name is selected without its extension and the caret sits where you
+clicked: typing adds there, Backspace rubs out the character behind it, ⌦ clears the
+selected name, and the arrows step from the click point.
+
+## Workspace toolbar
+
+Shortcut buttons, grouped into **workspaces**; one workspace shows at a time. The picker
+on the left switches workspace (right-click it to rename or delete); the gear manages them.
+There is always at least one, and names are unique.
+
+**Adding a shortcut:** drag a folder, app or file onto a bar, from a pane or the Finder.
+Apps arrive icon only; everything else keeps its label. Dropping the same thing twice on
+a row is refused with a note; dropping one that is on another row moves it here.
+
+Clicking a shortcut shows its folder in the active pane — a link, not a switch: it goes to
+its folder every time — or opens anything else. Files dropped on an app's button open in
+that app. **⌘-click** (or right-click ▸ Properties) opens its properties: label, show the
+text, full path, icon (Library… from the bundled set, File… from any image, `.icns` or
+app, Default), and a vertical **icon size** slider that resizes the button live. Delete
+shortcut sits apart in red.
+
+The **+** adds another row of shortcuts under the bar; each extra row has a **−** that
+removes it, moving its shortcuts up a row. The **pencil** turns on rearranging: drag the
+buttons into the order you want, across rows too. The zip, unzip and magnifier buttons
+pack, unpack and find files.
+
+**Icon library** — the `.ico` and `.svg` files in [Resources/buttons/](Resources/buttons/)
+are bundled into the app and offered by Library…; subfolders become groups. Add more by
+dropping files in and rebuilding. One-colour SVGs are drawn in the theme's text colour and
+follow it; coloured ones keep their colours; and each drawing is fitted to the button by
+its own outline, not its canvas.
+
+## Saved pane layouts
+
+The second bar remembers pairs of folders, one per pane, and restores both with one click.
+**+** saves both panes as they are and asks for a name (pre-filled with the two folder
+names) and a width (70–600). ⌘-click or right-click ▸ Properties renames, resizes or
+deletes; right-click ▸ Update to current panes repoints it. Layouts are kept per
+workspace. A layout whose folder has gone leaves that pane where it is.
+
+## Centre strip
+
+The column between the panes holds the shared commands, and is also the splitter — drag
+anywhere on it that is not a button.
+
+| Button | Action |
+| --- | --- |
+| `V` | Go to `/Volumes` in the active pane (⌘-click to point it elsewhere) |
+| `=` | **Match** — show the active pane's folder in the other pane |
+| `↓` | **Quick folder** — go to a folder you choose (⌘-click to choose) |
+| `T` | **Scratchpad**, a toggle — turns the active pane into a plain-text editor and back |
+| `P` / `FP` | Copy the **name** / **full path** of the marked entries, or the one under the cursor |
+| 🔍 | Find files |
+
+Folders and apps dropped on the strip become buttons on it. Every button has properties
+(⌘-click), where its icon is chosen. The pencil at the foot rearranges the strip.
+
+**Scratchpad** — each pane has its own, so both can be open side by side. Everything
+typed or pasted is reduced to what ISO 8859-1 holds: curly quotes straighten, dashes
+become `-`, `…` becomes `...`, odd spaces become ordinary ones, zero-width marks go, `€`
+`™` `•` `→` are spelled out, accented Latin is kept, other accents fold to the base letter,
+and CJK and emoji are dropped. Paste takes the plain-text flavour only, so formatting never
+comes along.
+
+## Archives
+
+Return or double-click on an archive and the pane goes inside: the path box shows the
+archive's own path carried on into it, `/work/pack.zip/docs`, and `..` climbs back out.
+Such a path can be typed, saved in a layout, and is restored at the next start. Archives
+are read with `bsdtar`, which ships with macOS: zip, tar and its compressed kinds, 7z,
+iso, and rar. Nothing is unpacked to list one.
+
+Inside an archive, F5 copies out (asking once about anything that would be overwritten),
+F3 views, Return opens a temporary copy; changing anything is refused with an explanation.
+
+**Packing** (⌥F5) makes a zip file from the marked entries, offered in the other pane's
+folder: also pack path names, recurse into subfolders, move to archive (originals go to
+the **Trash**, and only those that went in whole), separate archives, compression level.
+A zip file that is there is replaced, after asking. It is written under a temporary name
+and read back before it takes its own, so nothing is left half made.
+
+**Unpacking** (⌥F9) unpacks the marked archives — any kind bsdtar reads — or, inside one,
+the marked entries, into the other pane's folder: masks (`*.txt;*.md`, `|` to exclude),
+path names on or off, overwrite, each archive into its own folder. Names that would climb
+out of the destination are dropped, and `:` becomes `_`.
+
+## Multi-rename tool
+
+⌘M over the marked entries. Name and extension masks with `[N]`, `[N2-5]`, `[N3-]`,
+`[N2,3]`, `[E]`, `[C]`, `[C100+5:4]`, `[Y] [M] [D] [h] [m] [s] [d] [t]`, `[P]`, `[G]`;
+search and replace as text or regular expression with capture groups; case conversion;
+live preview with a status per row (`name clash`, `already exists`, `invalid name`).
+Renames go through temporary names, so names can be swapped, and **Undo rename** puts the
+last batch back.
+
+## Find files
+
+⌥F7, the toolbar magnifier or the centre strip. Masks with exclusions, several start
+folders, subfolders and hidden files on or off, text containing (case, whole words,
+regex, NOT containing), size and date limits. Results stream in while it searches;
+**Go to file** puts the cursor on one, **Feed to listbox** fills the active pane with all
+of them.
+
+## Other computers
+
+The drive list also offers the computers on your **Tailscale** network (asked of the
+Tailscale app in the background, and again each time the list opens). Pick one and the pane
+lists the folders it shares, whole drives such as `C$` included; go into one and macOS
+mounts it under `/Volumes`, asking for a login itself if it needs one (with "Remember this
+password in my keychain"). From the top of a share, `..` goes back to the list of shares.
+Any computer can be typed as `smb://name` or `smb://name/share`. A computer that is off is
+said within a few seconds rather than after the system's half-minute timeout.
+
+Listing a computer's shares uses a login already in the keychain; the first time, type
+`smb://computer/share` once and log in when asked. To see another Windows PC's whole drives,
+see DAZ Commander's README, "Whole drives".
+
+## Kept from the earlier MAC Commander
+
+Undo (⌘Z), bookmarks (Go menu, ⌘D), back/forward history, looking inside an archive
+(⌘Y), browsing non-zip archives, and the Replace / Skip / Keep Both question when a copy
+meets a file of the same name. Folders pinned to the old top bar become shortcuts in the
+first workspace.
 
 ## Layout
 
 ```
 Sources/MACCommander/
-  App.swift              app entry point + all menu commands and shortcuts
+  App.swift                 entry point, menus and shortcuts
   Models/
-    FileItem.swift       one directory entry and its display formatting
-    PaneModel.swift      per-pane state: contents, sort, filter, history, watcher
-    AppState.swift       the two panes, which one is active, the file commands
-    Transfer.swift       copy/move/trash engine, conflict resolution, progress
-    Bookmarks.swift      bookmark list, persisted to UserDefaults
-    ArchiveService.swift bsdtar wrapper: listing, indexing, extraction
-    ArchiveIndex.swift   an archive's table of contents, bucketed by folder
+    Settings.swift          settings.json: workspaces, shortcuts, layouts, centre strip
+    AppState*.swift         panes, commands, workspaces, zip commands, dialogs, undo
+    PaneModel.swift         one pane: listing, cursor, marks, filter, history, watching
+    FileItem.swift          one row, sorting, summary line, masks
+    Transfer.swift          copy/move/delete engine and the background job boxes
+    ArchiveService/Index    bsdtar listing and extraction
+    ZipPacker/ZipUnpacker   packing and unpacking
+    RenameEngine.swift      multi-rename rules
+    FileSearch.swift        find files
+    PlainText.swift         the scratchpad's ISO 8859-1 reduction
+    NetworkPlaces.swift     Tailscale, SMB shares, mounting
+    IconLibrary.swift       bundled icons, SVG tinting and fitting
   Views/
-    ContentView.swift    window layout, F-key bar, progress bar, sheet routing
-    PaneView.swift       one pane: breadcrumb, filter, file table, footer
-    Sheets.swift         rename, new folder, trash confirm, conflict, bookmarks
-Resources/Info.plist     bundle metadata and folder-access usage strings
-build.sh                 builds and signs the .app
-make-signing-cert.sh     one-off: stable signing identity, run once
+    ContentView.swift       window layout
+    Bars.swift              toolbar, layout bar, centre strip, command line, F-keys, job boxes
+    PaneView.swift          drive bar, path box, scratchpad
+    FileListView.swift      the file list (AppKit table) and in-place rename
+    Theme.swift             palettes, interface size, button style, glyphs
+    *Sheet.swift            the dialogs
+Resources/buttons/          the icon library
 ```
