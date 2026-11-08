@@ -27,6 +27,8 @@ struct FileListView: NSViewRepresentable {
         table.gridStyleMask = []
         table.focusRingType = .none
         table.style = .plain
+        table.rowSizeStyle = .custom
+        table.allowsColumnReordering = false
         table.dataSource = context.coordinator
         table.delegate = context.coordinator
         table.registerForDraggedTypes([.fileURL])
@@ -106,7 +108,6 @@ struct FileListView: NSViewRepresentable {
             }
             (table.headerView as? FileHeaderView)?.ui = ui
             table.headerView?.frame.size.height = ui.s(22)
-            table.sizeLastColumnToFit()
             shownVersion = -1
         }
 

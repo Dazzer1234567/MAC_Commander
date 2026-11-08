@@ -98,19 +98,25 @@ struct PromptSheet: View {
     let finish: (String?) -> Void
 
     @Environment(\.ui) private var ui
-    @State private var text = ""
+    @State private var text: String
+
+    init(request: PromptRequest, finish: @escaping (String?) -> Void) {
+        self.request = request
+        self.finish = finish
+        if case .input(_, let initial, _) = request.kind { _text = State(initialValue: initial) }
+        else { _text = State(initialValue: "") }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: ui.s(12)) {
             Text(request.title).font(ui.font(13, .semibold)).foregroundStyle(ui.text)
             switch request.kind {
-            case .input(let prompt, let initial, let selectAll):
+            case .input(let prompt, _, let selectAll):
                 Text(prompt).font(ui.font(12)).foregroundStyle(ui.text)
                 DazTextField(text: $text, font: ui.nsFont(12), textColor: ui.palette.text,
                              background: ui.palette.panel, selectAllOnAppear: selectAll, focusOnAppear: true,
                              onSubmit: { finish(text) }, onCancel: { finish(nil) })
                     .frame(height: ui.s(24))
-                    .onAppear { text = initial }
                 buttons(ok: "OK", cancel: true)
             case .confirm(let message, let ok):
                 Text(message).font(ui.font(12)).foregroundStyle(ui.text)
