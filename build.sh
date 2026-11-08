@@ -34,6 +34,9 @@ if [ icons/logo.svg -nt Resources/AppIcon.icns ]; then
 	swift Tools/make-icon.swift && iconutil -c icns icons/AppIcon.iconset -o Resources/AppIcon.icns
 fi
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "${APP}/Contents/Resources/AppIcon.icns"
+# The icon library offered by Library... in a shortcut's properties. Drop an .ico or
+# an .svg into Resources/buttons and rebuild; subfolders become groups in the picker.
+[ -d Resources/buttons ] && cp -R Resources/buttons "${APP}/Contents/Resources/buttons"
 printf 'APPL????' > "${APP}/Contents/PkgInfo"
 
 # macOS re-asks for folder access whenever the app's signing identity changes.
