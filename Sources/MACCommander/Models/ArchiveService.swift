@@ -45,6 +45,29 @@ enum ArchiveService {
         extensions.contains(url.pathExtension.lowercased())
     }
 
+    static func isZip(_ path: String) -> Bool {
+        (path as NSString).pathExtension.lowercased() == "zip"
+    }
+
+    /// Splits a path that runs on past an archive into the archive and the folder inside
+    /// it: `/work/pack.zip/docs` is `docs` inside `/work/pack.zip`. Nil when no archive on
+    /// disk starts the path. A folder named `something.zip` is a folder, not an archive.
+    static func locate(_ path: String) -> (archive: String, inner: String)? {
+        var current = path
+        var rest: [String] = []
+        let fm = FileManager.default
+        while current != "/" && !current.isEmpty {
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: current, isDirectory: &isDir) {
+                guard !isDir.boolValue, isArchive(URL(fileURLWithPath: current)) else { return nil }
+                return (current, rest.reversed().joined(separator: "/"))
+            }
+            rest.append((current as NSString).lastPathComponent)
+            current = (current as NSString).deletingLastPathComponent
+        }
+        return nil
+    }
+
     /// Name to give the folder an archive is extracted into: "site.tar.gz"
     /// becomes "site", not "site.tar".
     static func baseName(of url: URL) -> String {

@@ -3,171 +3,167 @@ import SwiftUI
 
 @main
 struct MACCommanderApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var state = AppState()
 
     var body: some Scene {
         Window("MAC Commander", id: "main") {
             ContentView(state: state)
-                .frame(minWidth: 760, minHeight: 420)
+                .frame(minWidth: 900, minHeight: 520)
         }
-        .defaultSize(width: 1180, height: 700)
+        .defaultSize(width: 1280, height: 760)
         .commands { AppCommands(state: state) }
     }
 }
 
-/// Function keys as menu equivalents. NSF1FunctionKey is 0xF704 and they run
-/// consecutively from there.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+}
+
+/// Function keys as menu equivalents. NSF1FunctionKey is 0xF704 and they run on from there.
 extension KeyEquivalent {
-    static let f2 = KeyEquivalent(Character(UnicodeScalar(0xF705)!))
-    static let f5 = KeyEquivalent(Character(UnicodeScalar(0xF708)!))
-    static let f6 = KeyEquivalent(Character(UnicodeScalar(0xF709)!))
-    static let f7 = KeyEquivalent(Character(UnicodeScalar(0xF70A)!))
-    static let f8 = KeyEquivalent(Character(UnicodeScalar(0xF70B)!))
+    static func f(_ n: Int) -> KeyEquivalent { KeyEquivalent(Character(UnicodeScalar(0xF703 + n)!)) }
 }
 
 struct AppCommands: Commands {
     @ObservedObject var state: AppState
 
+    /// Whether the keyboard is in a text field: some keys belong to the text there.
+    private var typing: Bool { NSApp.keyWindow?.firstResponder is NSText }
+
     var body: some Commands {
+        CommandGroup(replacing: .appVisibility) {
+            Button("Hide MAC Commander") { NSApp.hide(nil) }
+            Button("Hide Others") { NSApp.hideOtherApplications(nil) }
+                .keyboardShortcut("h", modifiers: [.command, .option])
+            Button("Show All") { NSApp.unhideAllApplications(nil) }
+        }
+
         CommandGroup(replacing: .newItem) {
-            Button("New Folder…") { state.sheet = .newFolder }
-                .keyboardShortcut(.f7, modifiers: [])
-        }
-
-        CommandGroup(after: .newItem) {
+            Button("View") { state.doView() }.keyboardShortcut(.f(3), modifiers: [])
+            Button("Edit") { state.doEdit() }.keyboardShortcut(.f(4), modifiers: [])
+            Button("Copy to Other Pane…") { state.doTransfer(move: false) }.keyboardShortcut(.f(5), modifiers: [])
+            Button("Move to Other Pane…") { state.doTransfer(move: true) }.keyboardShortcut(.f(6), modifiers: [])
+            Button("New Folder…") { state.doNewFolder() }.keyboardShortcut(.f(7), modifiers: [])
+            Button("Delete to Trash…") { state.doDelete(toTrash: true) }.keyboardShortcut(.f(8), modifiers: [])
+            Button("Delete Permanently…") { state.doDelete(toTrash: false) }.keyboardShortcut(.f(8), modifiers: .shift)
             Divider()
-            Button("Open") { state.active.open(Array(state.active.selection)) }
-                .keyboardShortcut(.downArrow, modifiers: .command)
-                .disabled(state.active.selection.isEmpty)
-            Button("Reveal in Finder") { state.revealInFinder() }
-                .keyboardShortcut("r", modifiers: [.command, .shift])
-            Button("Open Terminal Here") { state.openTerminalHere() }
-                .keyboardShortcut("t", modifiers: [.command, .shift])
-        }
-
-        CommandGroup(replacing: .saveItem) {
-            Button("Rename…") { state.requestRename() }
-                .keyboardShortcut(.f2, modifiers: [])
-                .disabled(state.active.selection.isEmpty)
+            Button("Rename") { state.active.beginRename() }.keyboardShortcut(.f(2), modifiers: [])
+            Button("Rename ") { state.active.beginRename() }.keyboardShortcut(.f(6), modifiers: .shift)
+            Button("Multi-Rename Tool…") { state.doMultiRename() }.keyboardShortcut("m", modifiers: .command)
             Divider()
-            Button("Move to Trash") { state.requestTrash() }
-                .keyboardShortcut(.f8, modifiers: [])
-                .disabled(state.active.selection.isEmpty)
-        }
-
-        CommandMenu("Commands") {
-            Button("Copy to Other Pane") { state.copyToOtherPane() }
-                .keyboardShortcut(.f5, modifiers: [])
-                .disabled(state.active.selection.isEmpty)
-            Button("Move to Other Pane") { state.moveToOtherPane() }
-                .keyboardShortcut(.f6, modifiers: [])
-                .disabled(state.active.selection.isEmpty)
+            Button("Pack into Zip File…") { state.doPack() }.keyboardShortcut(.f(5), modifiers: .option)
+            Button("Unpack…") { state.doUnpack() }.keyboardShortcut(.f(9), modifiers: .option)
+            Button("Look Inside Archive…") { state.peekArchive() }.keyboardShortcut("y", modifiers: .command)
+            Button("Find Files…") { state.doSearch() }.keyboardShortcut(.f(7), modifiers: .option)
             Divider()
-            // macOS keeps F5/F6 for dictation and Do Not Disturb unless the user
-            // opts into standard function keys, so every F-key has a ⌘ twin here.
+            Button("Get Info") { state.doProperties() }.keyboardShortcut(.return, modifiers: .option)
+            Button("Open Terminal Here") { state.openTerminal() }.keyboardShortcut("c", modifiers: [.command, .shift])
+            Button("Show in Finder") { state.openFinder() }.keyboardShortcut("e", modifiers: [.command, .shift])
+            Divider()
+            // macOS keeps F5, F6 and the rest for itself unless "Use F1, F2, etc. keys as
+            // standard function keys" is on, so every one of them has a ⌘ twin.
             Menu("If Function Keys Are Taken") {
-                Button("Rename…") { state.requestRename() }
-                    .keyboardShortcut("e", modifiers: [.command, .shift])
-                Button("Copy to Other Pane") { state.copyToOtherPane() }
-                    .keyboardShortcut("c", modifiers: [.command, .shift])
-                Button("Move to Other Pane") { state.moveToOtherPane() }
-                    .keyboardShortcut("m", modifiers: [.command, .shift])
-                Button("New Folder…") { state.sheet = .newFolder }
-                    .keyboardShortcut("n", modifiers: [.command, .shift])
-                Button("Move to Trash") { state.requestTrash() }
-                    .keyboardShortcut(.delete, modifiers: .command)
+                Button("Rename") { state.active.beginRename() }.keyboardShortcut("2", modifiers: .command)
+                Button("View") { state.doView() }.keyboardShortcut("3", modifiers: .command)
+                Button("Edit") { state.doEdit() }.keyboardShortcut("4", modifiers: .command)
+                Button("Copy to Other Pane…") { state.doTransfer(move: false) }.keyboardShortcut("5", modifiers: .command)
+                Button("Move to Other Pane…") { state.doTransfer(move: true) }.keyboardShortcut("6", modifiers: .command)
+                Button("New Folder…") { state.doNewFolder() }.keyboardShortcut("7", modifiers: .command)
+                Button("Delete to Trash…") { state.doDelete(toTrash: true) }.keyboardShortcut("8", modifiers: .command)
+                Button("Delete Permanently…") { state.doDelete(toTrash: false) }.keyboardShortcut("8", modifiers: [.command, .option])
+                Divider()
+                Button("Pack into Zip File…") { state.doPack() }.keyboardShortcut("5", modifiers: [.command, .option])
+                Button("Find Files…") { state.doSearch() }.keyboardShortcut("7", modifiers: [.command, .option])
+                Button("Unpack…") { state.doUnpack() }.keyboardShortcut("9", modifiers: [.command, .option])
+                Button("Drive List, Left Pane") { state.openDriveList(.left) }.keyboardShortcut("1", modifiers: [.command, .option])
+                Button("Drive List, Right Pane") { state.openDriveList(.right) }.keyboardShortcut("2", modifiers: [.command, .option])
             }
-            Divider()
-            Button("Look Inside Archive…") { state.peekArchive() }
-                .keyboardShortcut("y", modifiers: .command)
-                .disabled(state.archiveToPeek == nil)
-            Button("Extract to Other Pane") { state.extractToOtherPane() }
-                .keyboardShortcut("e", modifiers: .command)
-                .disabled(!state.canExtract)
-            Divider()
-            Button("Copy Name") { state.copySelectedNames() }
-                .keyboardShortcut("p", modifiers: [.command, .option])
-            Button("Copy Full Path") { state.copySelectedFullPaths() }
-                .keyboardShortcut("f", modifiers: [.command, .option])
         }
 
         CommandGroup(replacing: .undoRedo) {
-            Button(state.canUndo ? "Undo \(state.undoLabel)" : "Undo") { state.undoLast() }
-                .keyboardShortcut("z", modifiers: .command)
-                .disabled(!state.canUndo)
+            Button(state.canUndo ? "Undo \(state.undoLabel)" : "Undo") {
+                // A text field keeps its own undo.
+                if let text = NSApp.keyWindow?.firstResponder as? NSTextView, text.undoManager?.canUndo == true {
+                    text.undoManager?.undo()
+                } else {
+                    state.undoLast()
+                }
+            }
+            .keyboardShortcut("z", modifiers: .command)
         }
 
         CommandGroup(after: .pasteboard) {
             Divider()
-            // No plain-Space shortcut here: a menu equivalent fires even while
-            // a text field has focus, which would stop you typing spaces into
-            // the filter or a rename. The pane's key monitor handles Space.
-            Button("Mark / Unmark  (Space)") { state.active.toggleMark() }
-            Button("Mark All") { state.active.markAll() }
-                .keyboardShortcut("a", modifiers: [.command, .option])
-            Button("Invert Marks") { state.active.invertMarks() }
-                .keyboardShortcut("i", modifiers: [.command, .option])
-            Button("Unmark All") { state.active.unmarkAll() }
-                .keyboardShortcut("u", modifiers: [.command, .option])
-                .disabled(state.active.marked.isEmpty)
+            Button("Invert Marks") { state.active.invertMarks() }.keyboardShortcut("i", modifiers: [.command, .option])
+            Button("Mark Matching…") { state.markByMask(on: true) }.keyboardShortcut("=", modifiers: [.command, .option])
+            Button("Unmark Matching…") { state.markByMask(on: false) }.keyboardShortcut("-", modifiers: [.command, .option])
+            Button("Unmark All") { state.active.markAll(false) }.keyboardShortcut("a", modifiers: [.command, .shift])
             Divider()
-            Button("Select All") { state.active.selectAll() }
-                .keyboardShortcut("a", modifiers: .command)
-            Button("Invert Selection") { state.active.invertSelection() }
-                .keyboardShortcut("a", modifiers: [.command, .shift])
-            Button("Deselect All") { state.active.selection = [] }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
+            Button("Copy Name") { state.copyToClipboard(fullPath: false) }.keyboardShortcut("p", modifiers: [.command, .option])
+            Button("Copy Full Path") { state.copyToClipboard(fullPath: true) }.keyboardShortcut("f", modifiers: [.command, .option])
+        }
+
+        CommandMenu("Settings") {
+            Button("Multi-Rename Tool…") { state.doMultiRename() }
             Divider()
-            Button("Filter This Folder") {
-                state.active.filterVisible = true
+            Menu("Colours") {
+                Toggle("Dark", isOn: Binding(get: { state.settings.theme == .dark }, set: { _ in state.applyTheme(.dark) }))
+                Toggle("Light", isOn: Binding(get: { state.settings.theme == .light }, set: { _ in state.applyTheme(.light) }))
             }
-            .keyboardShortcut("f", modifiers: .command)
+            Menu("Interface Size") {
+                ForEach(UIScale.ladder, id: \.self) { step in
+                    let toggle = Toggle("\(Int(step * 100))%", isOn: Binding(
+                        get: { abs(state.settings.uiScale - step) < 0.001 }, set: { _ in state.applyScale(step) }))
+                    if step == 1.0 { toggle.keyboardShortcut("0", modifiers: .command) } else { toggle }
+                }
+                Divider()
+                Button("Bigger") { state.stepScale(1) }.keyboardShortcut("+", modifiers: .command)
+                Button("Bigger ") { state.stepScale(1) }.keyboardShortcut("=", modifiers: .command)
+                Button("Smaller") { state.stepScale(-1) }.keyboardShortcut("-", modifiers: .command)
+            }
+            Divider()
+            Toggle("Show Hidden Files", isOn: Binding(get: { state.left.showHidden }, set: { _ in state.toggleHidden() }))
+                .keyboardShortcut("h", modifiers: .command)
+            Button("Show Hidden Files ") { state.toggleHidden() }.keyboardShortcut(".", modifiers: [.command, .shift])
         }
 
         CommandMenu("Go") {
-            Button("Enclosing Folder") { state.active.goUp() }
-                .keyboardShortcut(.upArrow, modifiers: .command)
-                .disabled(!state.active.canGoUp)
-            Button("Back") { state.active.goBack() }
-                .keyboardShortcut("[", modifiers: .command)
-                .disabled(!state.active.canGoBack)
-            Button("Forward") { state.active.goForward() }
-                .keyboardShortcut("]", modifiers: .command)
-                .disabled(!state.active.canGoForward)
+            Button("Up One Level") { state.active.goUp() }.keyboardShortcut(.upArrow, modifiers: .command)
+            Button("Back") { state.active.goBack() }.keyboardShortcut("[", modifiers: .command)
+            Button("Forward") { state.active.goForward() }.keyboardShortcut("]", modifiers: .command)
             Divider()
-            Button("Switch Pane") { state.toggleActiveSide() }
-                .keyboardShortcut("\\", modifiers: .command)
-            Button("Swap Panes") { state.swapPanes() }
-                .keyboardShortcut("u", modifiers: .command)
-            Button("Other Pane → This Folder") { state.syncOtherPaneToActive() }
-                .keyboardShortcut("=", modifiers: [.command, .shift])
-            Button("Equal Pane Widths") { state.fitPanes() }
-                .keyboardShortcut("=", modifiers: [.command, .option])
+            Button("Switch Pane") { state.toggleActiveSide() }.keyboardShortcut("\\", modifiers: .command)
+            Button("Swap Panes") { state.swapPanels() }.keyboardShortcut("u", modifiers: .command)
+            Button("Match Panes") { state.matchPanes() }.keyboardShortcut("=", modifiers: [.command, .shift])
+            Button("Highlighted Folder in Other Pane  (⌘← ⌘→)") { state.targetEqualsSource() }
+            Button("Refresh Both Panes") { state.refreshBoth() }.keyboardShortcut("r", modifiers: .command)
             Divider()
-            Button("Home") { state.active.navigate(to: FileManager.default.homeDirectoryForCurrentUser) }
-                .keyboardShortcut("h", modifiers: [.command, .shift])
+            Button("Drive List, Left Pane") { state.openDriveList(.left) }.keyboardShortcut(.f(1), modifiers: .option)
+            Button("Drive List, Right Pane") { state.openDriveList(.right) }.keyboardShortcut(.f(2), modifiers: .option)
+            Button("Home") { state.openFolder(Paths.home) }.keyboardShortcut("h", modifiers: [.command, .shift])
+            Divider()
             ForEach(state.bookmarks.items) { bookmark in
-                Button(bookmark.name) { state.active.navigate(to: bookmark.url) }
+                Button(bookmark.name) { state.openFolder(bookmark.path) }
             }
             Divider()
-            Button("Bookmark This Folder") { state.bookmarkActiveDirectory() }
-                .keyboardShortcut("d", modifiers: .command)
-            Button("Manage Bookmarks…") { state.sheet = .manageBookmarks }
-            Divider()
-            Button("Link This Folder to the Top Bar") { state.linkActiveDirectory() }
-                .keyboardShortcut("l", modifiers: .command)
-            Button("Remove All Links") { state.links.removeAll() }
-                .disabled(state.links.items.isEmpty)
+            Button("Bookmark This Folder") { state.bookmarkActiveDirectory() }.keyboardShortcut("d", modifiers: .command)
+            Button("Manage Bookmarks…") {
+                Task {
+                    _ = await state.present { (done: @escaping (Bool?) -> Void) in
+                        BookmarksSheet(store: state.bookmarks, onClose: { done(true) })
+                    }
+                }
+            }
+            Button("Add This Folder to the Toolbar") {
+                state.dropOnToolbar([state.active.realFolder], row: 0)
+            }
+            .keyboardShortcut("l", modifiers: .command)
         }
 
-        CommandGroup(after: .toolbar) {
-            Button(state.active.showHidden ? "Hide Hidden Files" : "Show Hidden Files") {
-                state.active.showHidden.toggle()
-                state.inactive.showHidden = state.active.showHidden
-            }
-            .keyboardShortcut(".", modifiers: [.command, .shift])
-            Button("Refresh") { state.refreshBoth() }
-                .keyboardShortcut("r", modifiers: .command)
+        CommandGroup(replacing: .windowSize) {
+            Button("Minimize") { NSApp.keyWindow?.miniaturize(nil) }
+            Button("Zoom") { NSApp.keyWindow?.zoom(nil) }
         }
     }
 }

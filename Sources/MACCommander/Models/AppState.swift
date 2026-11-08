@@ -9,25 +9,7 @@ enum Side: Hashable {
     var other: Side { self == .left ? .right : .left }
 }
 
-enum SheetKind: Identifiable {
-    case newFolder
-    case rename(FileItem)
-    case confirmTrash([FileItem])
-    case manageBookmarks
-    case peekArchive(FileItem)
-
-    var id: String {
-        switch self {
-        case .newFolder: return "newFolder"
-        case .rename(let item): return "rename:\(item.url.path)"
-        case .confirmTrash(let items): return "trash:\(items.count):\(items.first?.url.path ?? "")"
-        case .manageBookmarks: return "bookmarks"
-        case .peekArchive(let item): return "peek:\(item.url.path)"
-        }
-    }
-}
-
-/// The last thing you did, stored as whatever is needed to reverse it.
+/// The last thing done, stored as whatever is needed to reverse it.
 enum UndoableAction {
     case move([PathPair])
     case copy([URL])
@@ -35,305 +17,234 @@ enum UndoableAction {
 
     var label: String {
         switch self {
-        case .move(let pairs):
-            return pairs.count == 1 ? "Move" : "Move of \(pairs.count) Items"
-        case .copy(let urls):
-            return urls.count == 1 ? "Copy" : "Copy of \(urls.count) Items"
-        case .rename:
-            return "Rename"
+        case .move(let pairs): return pairs.count == 1 ? "Move" : "Move of \(pairs.count) Items"
+        case .copy(let urls): return urls.count == 1 ? "Copy" : "Copy of \(urls.count) Items"
+        case .rename: return "Rename"
         }
     }
 }
 
+/// A question the app is waiting on: a line of input, a yes/no, or a warning.
+struct PromptRequest: Identifiable {
+    enum Kind {
+        case input(prompt: String, initial: String, selectAll: Bool)
+        case confirm(message: String, ok: String)
+        case warn(message: String)
+    }
+
+    let id = UUID()
+    let title: String
+    let kind: Kind
+    let answer: (String?) -> Void
+}
+
+/// A dialog of any kind, shown as a sheet on the main window.
+struct SheetRequest: Identifiable {
+    let id = UUID()
+    let view: AnyView
+}
+
 @MainActor
 final class AppState: ObservableObject {
-    @Published var left: PaneModel
-    @Published var right: PaneModel
-    @Published var activeSide: Side = .left
-    @Published var sheet: SheetKind?
-    @Published var errorReport: [String] = []
-    @Published private(set) var undoStack: [UndoableAction] = []
-
-    /// Width of the left pane. `nil` means "an even split of whatever is
-    /// available", which is exactly what the Fit button wants, so Fit is just a
-    /// reset rather than a calculation.
-    @Published var leftPaneWidth: CGFloat?
-
-    let bookmarks = BookmarkStore()
-    let links = LinkStore()
+    let settings: AppSettings
+    let left: PaneModel
+    let right: PaneModel
+    let jobs = JobCenter()
     let transfer = TransferController()
+    let bookmarks = BookmarkStore()
 
+    @Published var activeSide: Side = .left
+    @Published var prompt: PromptRequest?
+    @Published var sheet: SheetRequest?
+    @Published private(set) var toolbarMessage: String?
+    @Published private(set) var undoStack: [UndoableAction] = []
+    /// Bumped whenever the settings change, so the bars redraw from them.
+    @Published private(set) var revision = 0
+    /// Rearranging the toolbar, or the centre strip: buttons only move.
+    @Published var editingShortcuts = false
+    @Published var editingCenter = false
+    @Published var computers: [NetworkComputer] = []
+    /// Bumped to drop a pane's drive list open, from ⌥F1 / ⌥F2.
+    @Published var driveListRequest: [Side: Int] = [.left: 0, .right: 0]
+
+    func openDriveList(_ side: Side) {
+        setActive(side)
+        driveListRequest[side, default: 0] += 1
+    }
+
+    private var pendingPrompts: [PromptRequest] = []
     private var cancellables: Set<AnyCancellable> = []
+    private var saveWork: DispatchWorkItem?
+    private var messageWork: DispatchWorkItem?
 
     init() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let downloads = home.appendingPathComponent("Downloads")
-        let secondStart = FileManager.default.fileExists(atPath: downloads.path) ? downloads : home
-        left = PaneModel(directory: home)
-        right = PaneModel(directory: secondStart)
+        settings = AppSettings.load()
+        left = PaneModel(side: .left)
+        right = PaneModel(side: .right)
 
-        // Menu items read pane and bookmark state, so republish when either changes.
-        for publisher in [
-            left.objectWillChange, right.objectWillChange,
-            bookmarks.objectWillChange, links.objectWillChange,
-        ] {
-            publisher
+        for pane in [left, right] {
+            pane.showHidden = settings.showHidden
+            pane.warn = { [weak self] in self?.warn($0) }
+            pane.activate = { [weak self, weak pane] in
+                guard let self, let pane else { return }
+                self.setActive(pane.side)
+            }
+            pane.pathChanged = { [weak self] in self?.pathsChanged() }
+            pane.objectWillChange
                 .receive(on: RunLoop.main)
                 .sink { [weak self] in self?.objectWillChange.send() }
                 .store(in: &cancellables)
         }
+
+        ArchiveCleanup.clearOldTemp()
+        startIn(left, settings.leftPath)
+        startIn(right, settings.rightPath)
+        applyTheme(settings.theme, save: false)
+        findComputers(timeout: 5)
     }
 
     var active: PaneModel { activeSide == .left ? left : right }
-    var inactive: PaneModel { activeSide == .left ? right : left }
-
+    var other: PaneModel { activeSide == .left ? right : left }
     func pane(_ side: Side) -> PaneModel { side == .left ? left : right }
 
-    // MARK: - Pane management
+    var ui: UI { UI(palette: Palette.of(settings.theme), scale: settings.uiScale) }
 
-    func toggleActiveSide() { activeSide = activeSide.other }
-
-    /// Gives both panes the same width.
-    func fitPanes() { leftPaneWidth = nil }
-
-    /// Swapping carries the whole location, so a pane browsing an archive keeps
-    /// browsing it after the swap.
-    func swapPanes() {
-        let leftLocation = left.location
-        let rightLocation = right.location
-        left.go(to: rightLocation)
-        right.go(to: leftLocation)
+    /// Puts a pane back where it was when the app was last closed, which may be inside an
+    /// archive. A pane is never left empty: if the place has gone, it starts at home.
+    private func startIn(_ pane: PaneModel, _ path: String) {
+        let quiet = pane.warn
+        pane.warn = { _ in }
+        defer { pane.warn = quiet }
+        if NetworkPlaces.shareParts(path) == nil, NetworkPlaces.serverOnly(path) == nil, pane.navigate(path) { return }
+        pane.navigate(Paths.home)
     }
 
-    func syncOtherPaneToActive() {
-        inactive.go(to: active.location)
+    func setActive(_ side: Side) {
+        guard activeSide != side else { return }
+        activeSide = side
+        pathsChanged()
     }
 
-    func refreshBoth() {
-        left.reload()
-        right.reload()
+    func toggleActiveSide() {
+        activeSide = activeSide.other
+        active.focusRequest += 1
     }
 
-    // MARK: - File commands
+    private func pathsChanged() {
+        NSApp?.mainWindow?.title = "MAC Commander — \(active.currentPath)"
+        scheduleSave()
+    }
 
-    /// The rows a command should act on: whatever is marked with the space bar,
-    /// falling back to the row under the cursor.
-    var operands: [FileItem] { active.operationTargets }
+    // MARK: - Settings
 
-    func copyToOtherPane() { runTransfer(.copy) }
-    func moveToOtherPane() { runTransfer(.move) }
+    /// Something in the settings changed: redraw what shows them and write them shortly.
+    func changed() {
+        revision += 1
+        scheduleSave()
+    }
 
-    private func runTransfer(_ kind: TransferKind) {
-        guard !transfer.isRunning else { return }
-        guard let destination = inactive.writableDirectory else {
-            errorReport = ["The other pane is inside an archive. Archives here are read-only, so nothing can be written into one."]
-            return
+    /// Writes the settings a moment after something changes, rather than only on the way
+    /// out: the process can end without ever closing its window.
+    func scheduleSave() {
+        saveWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.saveNow() }
+        saveWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    func saveNow() {
+        saveWork?.cancel()
+        if !left.showingResults { settings.leftPath = left.currentPath }
+        if !right.showingResults { settings.rightPath = right.currentPath }
+        settings.showHidden = left.showHidden
+        settings.save()
+    }
+
+    func applyTheme(_ theme: AppTheme, save: Bool = true) {
+        settings.theme = theme
+        NSApp?.appearance = NSAppearance(named: theme == .dark ? .darkAqua : .aqua)
+        IconLibrary.setInk(Palette.of(theme).text)
+        if save { changed() } else { revision += 1 }
+    }
+
+    func applyScale(_ scale: Double) {
+        settings.uiScale = UIScale.nearest(scale)
+        changed()
+    }
+
+    func stepScale(_ direction: Int) { applyScale(UIScale.step(from: settings.uiScale, by: direction)) }
+
+    // MARK: - Messages and questions
+
+    /// A note at the right of the toolbar for a couple of seconds.
+    func flash(_ text: String) {
+        toolbarMessage = text
+        messageWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.toolbarMessage = nil }
+        messageWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
+    }
+
+    private func enqueue(_ request: PromptRequest) {
+        if prompt == nil { prompt = request } else { pendingPrompts.append(request) }
+    }
+
+    /// Called by the prompt sheet once it has its answer.
+    func finishPrompt(_ answer: String?) {
+        let finished = prompt
+        prompt = nil
+        finished?.answer(answer)
+        if !pendingPrompts.isEmpty {
+            let next = pendingPrompts.removeFirst()
+            DispatchQueue.main.async { self.prompt = next }
         }
-        if active.isInsideArchive {
-            guard kind == .copy else {
-                errorReport = ["Items inside an archive can be copied out, but not moved or deleted."]
-                return
+    }
+
+    func warn(_ message: String) {
+        enqueue(PromptRequest(title: "MAC Commander", kind: .warn(message: message), answer: { _ in }))
+    }
+
+    /// A line of input. Nil means the user backed out.
+    func ask(_ title: String, _ prompt: String, initial: String, selectAll: Bool = true) async -> String? {
+        await withCheckedContinuation { continuation in
+            enqueue(PromptRequest(title: title, kind: .input(prompt: prompt, initial: initial, selectAll: selectAll),
+                                  answer: { continuation.resume(returning: $0) }))
+        }
+    }
+
+    func confirm(_ message: String, title: String, ok: String) async -> Bool {
+        await withCheckedContinuation { continuation in
+            enqueue(PromptRequest(title: title, kind: .confirm(message: message, ok: ok),
+                                  answer: { continuation.resume(returning: $0 != nil) }))
+        }
+    }
+
+    /// Shows any dialog as a sheet and waits for what it hands back. The view is given a
+    /// function to call with its result, or with nil when it is cancelled.
+    func present<T, V: View>(_ make: (@escaping (T?) -> Void) -> V) async -> T? {
+        await withCheckedContinuation { continuation in
+            var answered = false
+            let view = make { [weak self] result in
+                guard !answered else { return }
+                answered = true
+                self?.sheet = nil
+                continuation.resume(returning: result)
             }
-            copyOutOfArchive(to: destination)
-            return
+            sheet = SheetRequest(view: AnyView(view.environment(\.ui, ui).environmentObject(self)))
         }
-
-        let sources = operands.map(\.url)
-        guard !sources.isEmpty else { return }
-        let source = active
-        let target = inactive
-        Task {
-            let outcome = await transfer.run(kind: kind, sources: sources, destination: destination)
-            source.reload()
-            target.reload()
-            record(outcome)
-            if !outcome.errors.isEmpty { errorReport = outcome.errors }
-        }
-    }
-
-    /// Copies whatever is marked out of the archive the active pane is browsing.
-    private func copyOutOfArchive(to destination: URL) {
-        guard case .archive(let archive, let inner) = active.location else { return }
-        let paths = operands.compactMap(\.archivePath)
-        guard !paths.isEmpty else { return }
-        let depth = inner.isEmpty ? 0 : inner.split(separator: "/").count
-        let target = inactive
-        Task {
-            let outcome = await transfer.copyOut(
-                paths: paths, from: archive, strippingComponents: depth, to: destination)
-            target.reload()
-            record(outcome)
-            if !outcome.errors.isEmpty { errorReport = outcome.errors }
-        }
-    }
-
-    /// Dropping onto a pane moves the files into the folder that pane is showing.
-    @discardableResult
-    func handleDrop(_ urls: [URL], into side: Side) -> Bool {
-        guard !transfer.isRunning else { return false }
-        guard let destination = pane(side).writableDirectory else { return false }
-        let origin = pane(side.other)
-
-        // Finder-style: dragging one row of a multi-row selection drags them all.
-        var sources = urls
-        if let dragged = urls.first,
-           urls.count == 1,
-           origin.selection.count > 1,
-           origin.selection.contains(dragged) {
-            sources = origin.selectedItems.map(\.url)
-        }
-
-        // A file already living in the destination has nowhere to go.
-        sources = sources.filter {
-            $0.deletingLastPathComponent().standardizedFileURL != destination.standardizedFileURL
-        }
-        guard !sources.isEmpty else { return false }
-
-        Task {
-            let outcome = await transfer.run(kind: .move, sources: sources, destination: destination)
-            refreshBoth()
-            record(outcome)
-            if !outcome.errors.isEmpty { errorReport = outcome.errors }
-        }
-        return true
-    }
-
-    // MARK: - Archives
-
-    var selectedArchives: [FileItem] {
-        operands.filter { !$0.isVirtual && ArchiveService.isArchive($0.url) }
-    }
-
-    var canExtract: Bool { !selectedArchives.isEmpty && !transfer.isRunning }
-
-    /// Peeking only makes sense for one archive at a time.
-    var archiveToPeek: FileItem? {
-        let archives = selectedArchives
-        return archives.count == 1 ? archives[0] : nil
-    }
-
-    func peekArchive() {
-        guard let archive = archiveToPeek else { return }
-        sheet = .peekArchive(archive)
-    }
-
-    func extractToOtherPane() {
-        let archives = selectedArchives.map(\.url)
-        guard !archives.isEmpty, !transfer.isRunning else { return }
-        guard let destination = inactive.writableDirectory else {
-            errorReport = ["The other pane is inside an archive, so there is nowhere to extract to."]
-            return
-        }
-        Task {
-            let outcome = await transfer.extract(archives: archives, intoParent: destination)
-            refreshBoth()
-            // Extraction only creates things, so undo removes them — exactly what
-            // the copy case already does.
-            if !outcome.createdCopies.isEmpty { push(.copy(outcome.createdCopies)) }
-            if !outcome.errors.isEmpty { errorReport = outcome.errors }
-        }
-    }
-
-    func requestTrash() {
-        let items = operands
-        guard !items.isEmpty else { return }
-        guard !active.isInsideArchive else {
-            errorReport = ["Items inside an archive cannot be deleted. Extract the archive first."]
-            return
-        }
-        sheet = .confirmTrash(items)
-    }
-
-    func performTrash(_ items: [FileItem]) {
-        let errors = transfer.trash(items.map(\.url))
-        active.selection = []
-        refreshBoth()
-        if !errors.isEmpty { errorReport = errors }
-    }
-
-    func requestRename() {
-        guard let item = operands.first else { return }
-        guard !item.isVirtual else {
-            errorReport = ["Items inside an archive cannot be renamed. Extract the archive first."]
-            return
-        }
-        sheet = .rename(item)
-    }
-
-    func performRename(_ item: FileItem, to newName: String) {
-        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != item.name, !trimmed.contains("/") else { return }
-        let destination = item.url.deletingLastPathComponent().appendingPathComponent(trimmed)
-        do {
-            try FileManager.default.moveItem(at: item.url, to: destination)
-            push(.rename(from: item.url, to: destination))
-            active.reload()
-            active.selectItem(named: trimmed)
-        } catch {
-            errorReport = ["Rename failed: \(error.localizedDescription)"]
-        }
-    }
-
-    func performNewFolder(named name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !trimmed.contains("/") else { return }
-        guard let folder = active.writableDirectory else {
-            errorReport = ["A folder cannot be created inside an archive."]
-            return
-        }
-        let destination = folder.appendingPathComponent(trimmed)
-        do {
-            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
-            active.reload()
-            active.selectItem(named: trimmed)
-        } catch {
-            errorReport = ["Could not create folder: \(error.localizedDescription)"]
-        }
-    }
-
-    func revealInFinder() {
-        let urls = operands.map(\.url)
-        if urls.isEmpty {
-            NSWorkspace.shared.activateFileViewerSelecting([active.directory])
-        } else {
-            NSWorkspace.shared.activateFileViewerSelecting(urls)
-        }
-    }
-
-    func openTerminalHere() {
-        let terminal = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
-        NSWorkspace.shared.open(
-            [active.directory],
-            withApplicationAt: terminal,
-            configuration: NSWorkspace.OpenConfiguration()
-        )
-    }
-
-    func bookmarkActiveDirectory() {
-        bookmarks.add(active.directory)
-    }
-
-    /// Pins the folder the active pane is currently showing to the top bar.
-    func linkActiveDirectory() {
-        guard let folder = active.writableDirectory else {
-            errorReport = ["A folder inside an archive cannot be pinned, because it only exists while the archive is open."]
-            return
-        }
-        links.add(folder)
     }
 
     // MARK: - Undo
 
     var canUndo: Bool { !undoStack.isEmpty }
-
     var undoLabel: String { undoStack.last?.label ?? "" }
 
-    private func record(_ outcome: TransferOutcome) {
+    func record(_ outcome: TransferOutcome) {
         if !outcome.movedPairs.isEmpty { push(.move(outcome.movedPairs)) }
         if !outcome.createdCopies.isEmpty { push(.copy(outcome.createdCopies)) }
     }
 
-    private func push(_ action: UndoableAction) {
+    func push(_ action: UndoableAction) {
         undoStack.append(action)
         if undoStack.count > 20 { undoStack.removeFirst() }
     }
@@ -341,32 +252,23 @@ final class AppState: ObservableObject {
     func undoLast() {
         guard let action = undoStack.popLast() else { return }
         var errors: [String] = []
-
         switch action {
         case .rename(let from, let to):
             errors += putBack(to, at: from)
         case .move(let pairs):
-            for pair in pairs.reversed() {
-                errors += putBack(pair.to, at: pair.from)
-            }
+            for pair in pairs.reversed() { errors += putBack(pair.to, at: pair.from) }
         case .copy(let created):
-            // The copies are the only new thing, so undoing means removing them.
             // Trash rather than delete, in case the undo itself was a mistake.
             for url in created where FileManager.default.fileExists(atPath: url.path) {
-                do {
-                    try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-                } catch {
-                    errors.append("\(url.lastPathComponent): \(error.localizedDescription)")
-                }
+                do { try FileManager.default.trashItem(at: url, resultingItemURL: nil) }
+                catch { errors.append("\(url.lastPathComponent): \(error.localizedDescription)") }
             }
         }
-
-        refreshBoth()
-        if !errors.isEmpty { errorReport = errors }
+        catchUpQuietly()
+        if !errors.isEmpty { warn(errors.prefix(10).joined(separator: "\n")) }
     }
 
-    /// Moves a file back where it came from, refusing to clobber anything that
-    /// has appeared at the original location in the meantime.
+    /// Moves a file back, refusing to clobber anything that has appeared there since.
     private func putBack(_ current: URL, at original: URL) -> [String] {
         let fm = FileManager.default
         guard fm.fileExists(atPath: current.path) else {
@@ -375,39 +277,33 @@ final class AppState: ObservableObject {
         guard !fm.fileExists(atPath: original.path) else {
             return ["\(original.lastPathComponent): something else is already at the original location"]
         }
-        do {
-            try fm.moveItem(at: current, to: original)
-            return []
-        } catch {
-            return ["\(current.lastPathComponent): \(error.localizedDescription)"]
+        do { try fm.moveItem(at: current, to: original); return [] }
+        catch { return ["\(current.lastPathComponent): \(error.localizedDescription)"] }
+    }
+
+    // MARK: - Other computers
+
+    /// Asks Tailscale which computers are online without holding anything up.
+    func findComputers(timeout: TimeInterval) {
+        Task.detached(priority: .utility) {
+            let found = NetworkPlaces.tailscaleComputers(timeout: timeout)
+            await MainActor.run {
+                self.computers = found
+                self.left.computers = found
+                self.right.computers = found
+            }
         }
     }
+}
 
-    // MARK: - Clipboard
-
-    /// Just the names, one per line: "report.pdf". Falls back to the name of the
-    /// folder the pane is showing when nothing is selected.
-    func copySelectedNames() {
-        let items = operands
-        copyToPasteboard(
-            items.isEmpty
-                ? active.directory.lastPathComponent
-                : items.map(\.name).joined(separator: "\n")
-        )
-    }
-
-    /// Absolute paths from the disk root: "/Users/daz/Downloads/report.pdf".
-    func copySelectedFullPaths() {
-        let items = operands
-        copyToPasteboard(
-            items.isEmpty
-                ? active.directory.path
-                : items.map(\.url.path).joined(separator: "\n")
-        )
-    }
-
-    private func copyToPasteboard(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+/// Throwaway copies of files opened from inside archives.
+enum ArchiveCleanup {
+    static func clearOldTemp() {
+        let folder = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("MACCommander-preview")
+        let cutoff = Date().addingTimeInterval(-24 * 3600)
+        for url in (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] {
+            let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            if date < cutoff { try? FileManager.default.removeItem(at: url) }
+        }
     }
 }

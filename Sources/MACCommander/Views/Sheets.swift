@@ -1,107 +1,152 @@
+import AppKit
 import SwiftUI
 
-/// Shared sheet for "New Folder" and "Rename".
-struct NameSheet: View {
-    let title: String
-    let prompt: String
-    let initialText: String
-    let confirmLabel: String
-    let onConfirm: (String) -> Void
+/// A single-line text field that can select all its text as it opens and reports Return
+/// and Escape. SwiftUI's own field can do neither reliably.
+struct DazTextField: NSViewRepresentable {
+    @Binding var text: String
+    var font: NSFont
+    var textColor: NSColor
+    var background: NSColor
+    var selectAllOnAppear = false
+    var focusOnAppear = false
+    var focusTrigger = 0
+    var onSubmit: () -> Void = {}
+    var onCancel: () -> Void = {}
+    var onFocus: () -> Void = {}
 
-    @Environment(\.dismiss) private var dismiss
-    @State private var text: String = ""
-    @FocusState private var fieldFocused: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title).font(.headline)
-            Text(prompt)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            TextField("Name", text: $text)
-                .textFieldStyle(.roundedBorder)
-                .focused($fieldFocused)
-                .onSubmit(confirm)
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button(confirmLabel, action: confirm)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
+    func makeNSView(context: Context) -> NSTextField {
+        let field = FocusReportingField()
+        field.delegate = context.coordinator
+        field.isBordered = true
+        field.bezelStyle = .squareBezel
+        field.focusRingType = .none
+        field.lineBreakMode = .byTruncatingHead
+        field.cell?.usesSingleLineMode = true
+        field.onFocus = { context.coordinator.parent.onFocus() }
+        apply(to: field)
+        field.stringValue = text
+        if focusOnAppear || selectAllOnAppear {
+            DispatchQueue.main.async {
+                field.window?.makeFirstResponder(field)
+                if self.selectAllOnAppear { field.currentEditor()?.selectAll(nil) }
+                else { field.currentEditor()?.selectedRange = NSRange(location: field.stringValue.utf16.count, length: 0) }
             }
         }
-        .padding(18)
-        .frame(width: 380)
-        .onAppear {
-            text = initialText
-            fieldFocused = true
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        apply(to: field)
+        if field.currentEditor() == nil && field.stringValue != text { field.stringValue = text }
+        if context.coordinator.lastTrigger != focusTrigger {
+            context.coordinator.lastTrigger = focusTrigger
+            DispatchQueue.main.async {
+                field.window?.makeFirstResponder(field)
+                field.currentEditor()?.selectAll(nil)
+            }
         }
     }
 
-    private func confirm() {
-        guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        onConfirm(text)
-        dismiss()
+    private func apply(to field: NSTextField) {
+        field.font = font
+        field.textColor = textColor
+        field.backgroundColor = background
+        field.drawsBackground = true
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: DazTextField
+        var lastTrigger = 0
+        init(_ parent: DazTextField) { self.parent = parent; lastTrigger = parent.focusTrigger }
+
+        func controlTextDidChange(_ note: Notification) {
+            guard let field = note.object as? NSTextField else { return }
+            parent.text = field.stringValue
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            if selector == #selector(NSResponder.insertNewline(_:)) {
+                parent.text = control.stringValue
+                parent.onSubmit()
+                return true
+            }
+            if selector == #selector(NSResponder.cancelOperation(_:)) {
+                parent.onCancel()
+                return true
+            }
+            return false
+        }
+    }
+
+    final class FocusReportingField: NSTextField {
+        var onFocus: () -> Void = {}
+        override func becomeFirstResponder() -> Bool {
+            let became = super.becomeFirstResponder()
+            if became { onFocus() }
+            return became
+        }
     }
 }
 
-struct TrashConfirmSheet: View {
-    let items: [FileItem]
-    let onConfirm: () -> Void
+/// The app's own input, confirmation and warning box.
+struct PromptSheet: View {
+    let request: PromptRequest
+    let finish: (String?) -> Void
 
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.ui) private var ui
+    @State private var text = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Image(systemName: "trash")
-                    .font(.system(size: 26))
-                    .foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(headline).font(.headline)
-                    Text("They go to the Trash, so you can still get them back.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            if items.count > 1 {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(items.prefix(12)) { item in
-                            Text(item.name).font(.system(size: 11)).lineLimit(1)
-                        }
-                        if items.count > 12 {
-                            Text("and \(items.count - 12) more…")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: 130)
-            }
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button("Move to Trash") {
-                    onConfirm()
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction)
+        VStack(alignment: .leading, spacing: ui.s(12)) {
+            Text(request.title).font(ui.font(13, .semibold)).foregroundStyle(ui.text)
+            switch request.kind {
+            case .input(let prompt, let initial, let selectAll):
+                Text(prompt).font(ui.font(12)).foregroundStyle(ui.text)
+                DazTextField(text: $text, font: ui.nsFont(12), textColor: ui.palette.text,
+                             background: ui.palette.panel, selectAllOnAppear: selectAll, focusOnAppear: true,
+                             onSubmit: { finish(text) }, onCancel: { finish(nil) })
+                    .frame(height: ui.s(24))
+                    .onAppear { text = initial }
+                buttons(ok: "OK", cancel: true)
+            case .confirm(let message, let ok):
+                Text(message).font(ui.font(12)).foregroundStyle(ui.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                buttons(ok: ok, cancel: true)
+            case .warn(let message):
+                Text(message).font(ui.font(12)).foregroundStyle(ui.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                buttons(ok: "OK", cancel: false)
             }
         }
-        .padding(18)
-        .frame(width: 400)
+        .padding(ui.s(18))
+        .frame(width: ui.s(isInput ? 560 : 520))
+        .background(ui.window)
     }
 
-    private var headline: String {
-        items.count == 1
-            ? "Move “\(items[0].name)” to the Trash?"
-            : "Move \(items.count) items to the Trash?"
+    private var isInput: Bool {
+        if case .input = request.kind { return true }
+        return false
+    }
+
+    private func buttons(ok: String, cancel: Bool) -> some View {
+        HStack(spacing: ui.s(8)) {
+            Spacer()
+            Button(ok) { finish(text) }
+                .buttonStyle(DazButtonStyle())
+                .frame(minWidth: ui.s(90))
+                .keyboardShortcut(.defaultAction)
+            if cancel {
+                Button("Cancel") { finish(nil) }
+                    .buttonStyle(DazButtonStyle())
+                    .frame(minWidth: ui.s(90))
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
     }
 }
 
@@ -109,53 +154,47 @@ struct ConflictSheet: View {
     let request: ConflictRequest
     let onDecide: (ConflictDecision, Bool) -> Void
 
+    @Environment(\.ui) private var ui
     @State private var applyToAll = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("“\(request.destination.lastPathComponent)” already exists")
-                    .font(.headline)
+        VStack(alignment: .leading, spacing: ui.s(14)) {
+            VStack(alignment: .leading, spacing: ui.s(4)) {
+                Text("\"\(request.destination.lastPathComponent)\" already exists")
+                    .font(ui.font(13, .semibold)).foregroundStyle(ui.text)
                 Text("in \(request.destination.deletingLastPathComponent().path)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
+                    .font(ui.font(11)).foregroundStyle(ui.dim)
+                    .lineLimit(2).truncationMode(.middle)
             }
-
-            HStack(alignment: .top, spacing: 20) {
+            HStack(alignment: .top, spacing: ui.s(20)) {
                 fileSummary("Existing", url: request.destination)
-                Divider().frame(height: 44)
                 fileSummary("New", url: request.source)
             }
-
             Toggle("Apply to all remaining conflicts", isOn: $applyToAll)
-                .font(.system(size: 11))
-
-            HStack {
-                Button("Cancel", role: .cancel) { onDecide(.cancel, applyToAll) }
-                    .keyboardShortcut(.cancelAction)
+                .font(ui.font(11)).foregroundStyle(ui.text)
+            HStack(spacing: ui.s(8)) {
+                Button("Cancel") { onDecide(.cancel, applyToAll) }
+                    .buttonStyle(DazButtonStyle()).keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Skip") { onDecide(.skip, applyToAll) }
-                Button("Keep Both") { onDecide(.keepBoth, applyToAll) }
+                Button("Skip") { onDecide(.skip, applyToAll) }.buttonStyle(DazButtonStyle())
+                Button("Keep Both") { onDecide(.keepBoth, applyToAll) }.buttonStyle(DazButtonStyle())
                 Button("Replace") { onDecide(.overwrite, applyToAll) }
-                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(DazButtonStyle()).keyboardShortcut(.defaultAction)
             }
         }
-        .padding(18)
-        .frame(width: 460)
+        .padding(ui.s(18))
+        .frame(width: ui.s(480))
+        .background(ui.window)
         .interactiveDismissDisabled()
     }
 
     private func fileSummary(_ label: String, url: URL) -> some View {
         let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-        return VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
-            Text(ByteCountFormatter.string(fromByteCount: Int64(values?.fileSize ?? 0), countStyle: .file))
-                .font(.system(size: 11))
-            Text(values?.contentModificationDate?.formatted(date: .abbreviated, time: .shortened) ?? "—")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+        return VStack(alignment: .leading, spacing: ui.s(2)) {
+            Text(label).font(ui.font(10, .semibold)).foregroundStyle(ui.dim)
+            Text(Listing.formatBytes(Int64(values?.fileSize ?? 0))).font(ui.font(11)).foregroundStyle(ui.text)
+            Text(values?.contentModificationDate.map { FileItem.dateFormatter.string(from: $0) } ?? "—")
+                .font(ui.font(11)).foregroundStyle(ui.dim)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -163,130 +202,101 @@ struct ConflictSheet: View {
 
 struct BookmarksSheet: View {
     @ObservedObject var store: BookmarkStore
-    @Environment(\.dismiss) private var dismiss
+    let onClose: () -> Void
+    @Environment(\.ui) private var ui
     @State private var selection: Bookmark.ID?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Bookmarks").font(.headline)
-
+        VStack(alignment: .leading, spacing: ui.s(12)) {
+            Text("Bookmarks").font(ui.font(13, .semibold)).foregroundStyle(ui.text)
             List(selection: $selection) {
                 ForEach(store.items) { bookmark in
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(bookmark.name).font(.system(size: 12))
-                        Text(bookmark.path)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                        Text(bookmark.name).font(ui.font(12))
+                        Text(bookmark.path).font(ui.font(10)).foregroundStyle(ui.dim)
+                            .lineLimit(1).truncationMode(.middle)
                     }
                     .tag(bookmark.id)
                 }
                 .onMove { store.move(from: $0, to: $1) }
-                .onDelete { offsets in
-                    for index in offsets.sorted(by: >) { store.remove(store.items[index]) }
-                }
             }
-            .frame(height: 240)
-            .border(Color(nsColor: .separatorColor))
-
+            .frame(height: ui.s(240))
             HStack {
-                Button("Add Folder…", action: addFolder)
+                Button("Add Folder…", action: addFolder).buttonStyle(DazButtonStyle())
                 Button("Remove") {
                     if let id = selection, let match = store.items.first(where: { $0.id == id }) {
                         store.remove(match)
                         selection = nil
                     }
                 }
+                .buttonStyle(DazButtonStyle())
                 .disabled(selection == nil)
-                Button("Reset", action: store.resetToDefaults)
+                Button("Reset", action: store.resetToDefaults).buttonStyle(DazButtonStyle())
                 Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
+                Button("Done", action: onClose).buttonStyle(DazButtonStyle()).keyboardShortcut(.defaultAction)
             }
-            Text("Drag to reorder. Bookmarks appear in each pane’s bookmark menu and in the Go menu.")
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
+            Text("Drag to reorder. Bookmarks are in the Go menu.")
+                .font(ui.font(10)).foregroundStyle(ui.dim)
         }
-        .padding(18)
-        .frame(width: 440)
+        .padding(ui.s(18))
+        .frame(width: ui.s(460))
+        .background(ui.window)
     }
 
     private func addFolder() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url {
-            store.add(url)
-        }
+        if panel.runModal() == .OK, let url = panel.url { store.add(url) }
     }
 }
 
-/// Shows the top level of an archive without extracting it or navigating into
-/// it. Anything nested is summarised as a child count rather than expanded.
+/// Shows the top level of an archive without going into it.
 struct PeekSheet: View {
     let item: FileItem
+    let onClose: () -> Void
 
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.ui) private var ui
     @State private var listing: ArchiveListing?
     @State private var failure: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(nsImage: item.icon)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(item.name).font(.headline).lineLimit(1).truncationMode(.middle)
-                    Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary)
-                }
+        VStack(alignment: .leading, spacing: ui.s(12)) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.name).font(ui.font(13, .semibold)).foregroundStyle(ui.text)
+                    .lineLimit(1).truncationMode(.middle)
+                Text(subtitle).font(ui.font(11)).foregroundStyle(ui.dim)
             }
-
             Group {
                 if let failure {
-                    ContentUnavailableView(
-                        "Can’t read this archive",
-                        systemImage: "exclamationmark.triangle",
-                        description: Text(failure)
-                    )
+                    Text("Can't read this archive:\n\(failure)").foregroundStyle(ui.text)
                 } else if let listing {
-                    if listing.topLevel.isEmpty {
-                        ContentUnavailableView("Empty archive", systemImage: "archivebox")
-                    } else {
-                        List(listing.topLevel) { entry in
-                            HStack(spacing: 6) {
-                                Image(systemName: entry.isDirectory ? "folder.fill" : "doc")
-                                    .foregroundStyle(entry.isDirectory ? Color.accentColor : .secondary)
-                                Text(entry.name).lineLimit(1).truncationMode(.middle)
-                                Spacer(minLength: 0)
-                                if entry.isDirectory {
-                                    Text("\(entry.childCount) item\(entry.childCount == 1 ? "" : "s")")
-                                        .foregroundStyle(.secondary)
-                                }
+                    List(listing.topLevel) { entry in
+                        HStack(spacing: 6) {
+                            Image(systemName: entry.isDirectory ? "folder.fill" : "doc")
+                            Text(entry.name).lineLimit(1).truncationMode(.middle)
+                            Spacer(minLength: 0)
+                            if entry.isDirectory {
+                                Text(Listing.plural(entry.childCount, "item")).foregroundStyle(ui.dim)
                             }
-                            .font(.system(size: 12))
                         }
-                        .listStyle(.plain)
-                        .border(Color(nsColor: .separatorColor))
+                        .font(ui.font(12))
                     }
                 } else {
-                    ProgressView("Reading…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    ProgressView("Reading…").frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .frame(height: 280)
-
+            .frame(height: ui.s(280))
             HStack {
                 Text("Top level only — nothing inside the folders is listed.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                    .font(ui.font(10)).foregroundStyle(ui.dim)
                 Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
+                Button("Done", action: onClose).buttonStyle(DazButtonStyle()).keyboardShortcut(.defaultAction)
             }
         }
-        .padding(18)
-        .frame(width: 480)
+        .padding(ui.s(18))
+        .frame(width: ui.s(500))
+        .background(ui.window)
         .task {
             do {
                 listing = try await Task.detached(priority: .userInitiated) {
@@ -299,8 +309,7 @@ struct PeekSheet: View {
     }
 
     private var subtitle: String {
-        guard let listing else { return item.displaySize }
-        let top = listing.topLevel.count
-        return "\(item.displaySize) · \(top) at the top level · \(listing.totalEntries) in total"
+        guard let listing else { return Listing.formatBytes(item.size) }
+        return "\(Listing.formatBytes(item.size)) · \(listing.topLevel.count) at the top level · \(listing.totalEntries) in total"
     }
 }

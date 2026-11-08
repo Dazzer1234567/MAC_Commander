@@ -1,18 +1,10 @@
 import Foundation
+import SwiftUI
 
 enum TransferKind: Sendable {
     case copy, move
 
     var verb: String { self == .copy ? "Copying" : "Moving" }
-}
-
-struct TransferProgress {
-    var title: String
-    var current: String
-    var completed: Int
-    var total: Int
-
-    var fraction: Double { total == 0 ? 0 : Double(completed) / Double(total) }
 }
 
 enum ConflictDecision {
@@ -24,11 +16,12 @@ struct PathPair: Sendable {
     let to: URL
 }
 
-/// What a transfer actually managed to do, which is what makes it undoable.
+/// What an operation actually managed to do, which is what makes it undoable.
 struct TransferOutcome {
     var movedPairs: [PathPair] = []
     var createdCopies: [URL] = []
     var errors: [String] = []
+    var cancelled = false
 }
 
 struct ConflictRequest: Identifiable {
@@ -37,80 +30,138 @@ struct ConflictRequest: Identifiable {
     let destination: URL
 }
 
-/// Runs copy/move/trash operations off the main thread, pausing to ask the user
-/// what to do whenever the destination already has a file of the same name.
+/// One long operation: a copy, move, delete, pack or unpack. It shows a small box in the
+/// bottom-right corner of the window, but only once it has run for 0.4 seconds - a quick
+/// one shows nothing at all.
+@MainActor
+final class Job: ObservableObject, Identifiable {
+    let id = UUID()
+    let verb: String
+    @Published var item = ""
+    @Published var done = 0
+    @Published var fraction: Double = 0
+    @Published var cancelRequested = false
+    /// Where the box has been dragged to, by its title.
+    @Published var offset: CGSize = .zero
+
+    init(verb: String) { self.verb = verb }
+
+    var title: String {
+        cancelRequested ? "\(verb) - stopping..." : "\(verb)  \(Int((fraction * 100).rounded()))%"
+    }
+
+    var countText: String { "\(Listing.plural(done, "item")) done" }
+
+    /// Called from the operation as it goes; cheap enough to call per file.
+    func started(_ name: String) { item = name }
+
+    func finished(of total: Int) {
+        done += 1
+        fraction = total == 0 ? 1 : min(1, Double(done) / Double(total))
+    }
+}
+
+/// The boxes on screen, by the slot each fills, counting up from the bottom.
+@MainActor
+final class JobCenter: ObservableObject {
+    @Published private(set) var slots: [Job?] = []
+
+    /// How many boxes have appeared so far. Taken before an operation: if it has moved by
+    /// the end, the operation went to the background and the user may well have moved on,
+    /// so the cursor should be left where they put it.
+    private(set) var mark = 0
+
+    private static let showAfter: TimeInterval = 0.4
+    private var finished: Set<UUID> = []
+
+    func start(_ verb: String) -> Job {
+        let job = Job(verb: verb)
+        DispatchQueue.main.asyncAfter(deadline: .now() + JobCenter.showAfter) { [weak self, weak job] in
+            guard let self, let job, !self.finished.contains(job.id) else { return }
+            if let free = self.slots.firstIndex(where: { $0 == nil }) { self.slots[free] = job }
+            else { self.slots.append(job) }
+            self.mark += 1
+        }
+        return job
+    }
+
+    func finish(_ job: Job) {
+        finished.insert(job.id)
+        if let index = slots.firstIndex(where: { $0?.id == job.id }) { slots[index] = nil }
+        // trailing empty slots are given back, so the next box starts at the bottom again
+        while let last = slots.last, last == nil { slots.removeLast() }
+    }
+
+    func appeared(since mark: Int) -> Bool { self.mark != mark }
+}
+
+/// Copies, moves and deletes, off the main thread, several at once if need be. Pauses to
+/// ask when the destination already has something of the same name.
 @MainActor
 final class TransferController: ObservableObject {
-    @Published var progress: TransferProgress?
     @Published var conflict: ConflictRequest?
 
-    private var decisionContinuation: CheckedContinuation<(ConflictDecision, Bool), Never>?
-    private var blanketDecision: ConflictDecision?
-    private var cancelled = false
-
-    var isRunning: Bool { progress != nil }
-
-    func cancel() {
-        cancelled = true
-        if conflict != nil { resolve(.cancel, applyToAll: true) }
-    }
+    private var waiting: [(ConflictRequest, CheckedContinuation<(ConflictDecision, Bool), Never>)] = []
 
     func resolve(_ decision: ConflictDecision, applyToAll: Bool) {
-        conflict = nil
-        let continuation = decisionContinuation
-        decisionContinuation = nil
-        continuation?.resume(returning: (decision, applyToAll))
+        guard !waiting.isEmpty else { conflict = nil; return }
+        let (_, continuation) = waiting.removeFirst()
+        conflict = waiting.first?.0
+        continuation.resume(returning: (decision, applyToAll))
     }
 
-    func run(kind: TransferKind, sources: [URL], destination: URL) async -> TransferOutcome {
+    private func ask(source: URL, destination: URL) async -> (ConflictDecision, Bool) {
+        await withCheckedContinuation { continuation in
+            let request = ConflictRequest(source: source, destination: destination)
+            waiting.append((request, continuation))
+            if conflict == nil { conflict = request }
+        }
+    }
+
+    /// Copies or moves `sources` to `destination`. With `rename` set, the single source is
+    /// given that name - copy-and-rename, as typing a full path in the F5 box does.
+    func run(kind: TransferKind, sources: [URL], destination: URL, rename: String? = nil,
+             job: Job) async -> TransferOutcome {
         var outcome = TransferOutcome()
-        guard !sources.isEmpty else { return outcome }
-        cancelled = false
-        blanketDecision = nil
+        var blanket: ConflictDecision?
         let fm = FileManager.default
 
-        progress = TransferProgress(
-            title: "\(kind.verb) \(sources.count) item\(sources.count == 1 ? "" : "s")…",
-            current: "",
-            completed: 0,
-            total: sources.count
-        )
-        defer { progress = nil }
+        for source in sources {
+            if job.cancelRequested { outcome.cancelled = true; break }
+            job.started(source.lastPathComponent)
 
-        for (index, source) in sources.enumerated() {
-            if cancelled { break }
-            progress?.completed = index
-            progress?.current = source.lastPathComponent
+            var target = destination.appendingPathComponent(rename ?? source.lastPathComponent)
 
-            var target = destination.appendingPathComponent(source.lastPathComponent)
-
-            // Copying a file into its own folder: silently make a numbered duplicate.
+            // Copying a file into its own folder makes a numbered duplicate.
             if source.standardizedFileURL == target.standardizedFileURL {
-                guard kind == .copy else { continue }
+                guard kind == .copy else { job.finished(of: sources.count); continue }
                 target = Self.uniqueURL(for: target)
+            } else if target.path.hasPrefix(source.path + "/") {
+                outcome.errors.append("\(source.lastPathComponent): cannot go inside itself")
+                job.finished(of: sources.count)
+                continue
             } else if fm.fileExists(atPath: target.path) {
                 let decision: ConflictDecision
-                if let blanket = blanketDecision {
+                if let blanket {
                     decision = blanket
                 } else {
-                    let (choice, applyToAll) = await askAboutConflict(source: source, destination: target)
-                    if applyToAll { blanketDecision = choice }
+                    let (choice, all) = await ask(source: source, destination: target)
+                    if all { blanket = choice }
                     decision = choice
                 }
-
                 switch decision {
                 case .cancel:
-                    cancelled = true
+                    outcome.cancelled = true
+                    job.cancelRequested = true
                     continue
                 case .skip:
+                    job.finished(of: sources.count)
                     continue
                 case .keepBoth:
                     target = Self.uniqueURL(for: target)
                 case .overwrite:
                     // Trash rather than delete, so replacing a file is recoverable.
-                    do {
-                        try fm.trashItem(at: target, resultingItemURL: nil)
-                    } catch {
+                    do { try fm.trashItem(at: target, resultingItemURL: nil) } catch {
                         outcome.errors.append("\(target.lastPathComponent): \(error.localizedDescription)")
                         continue
                     }
@@ -133,59 +184,34 @@ final class TransferController: ObservableObject {
             } catch {
                 outcome.errors.append("\(source.lastPathComponent): \(error.localizedDescription)")
             }
+            job.finished(of: sources.count)
         }
-
-        progress?.completed = sources.count
         return outcome
     }
 
-    /// Each archive lands in its own folder beside the others, rather than
-    /// spilling loose files into the destination.
-    func extract(archives: [URL], intoParent parent: URL) async -> TransferOutcome {
-        var outcome = TransferOutcome()
-        guard !archives.isEmpty else { return outcome }
-        cancelled = false
-
-        progress = TransferProgress(
-            title: "Extracting \(archives.count) archive\(archives.count == 1 ? "" : "s")…",
-            current: "",
-            completed: 0,
-            total: archives.count
-        )
-        defer { progress = nil }
-
-        for (index, archive) in archives.enumerated() {
-            if cancelled { break }
-            progress?.completed = index
-            progress?.current = archive.lastPathComponent
-
-            let target = Self.uniqueURL(
-                for: parent.appendingPathComponent(ArchiveService.baseName(of: archive)))
+    /// To the Trash, or gone for good.
+    func delete(_ urls: [URL], toTrash: Bool, job: Job) async -> [String] {
+        var errors: [String] = []
+        for url in urls {
+            if job.cancelRequested { break }
+            job.started(url.lastPathComponent)
             do {
                 try await Task.detached(priority: .userInitiated) {
-                    try ArchiveService.extract(archive, into: target)
+                    if toTrash { try FileManager().trashItem(at: url, resultingItemURL: nil) }
+                    else { try FileManager().removeItem(at: url) }
                 }.value
-                outcome.createdCopies.append(target)
             } catch {
-                outcome.errors.append("\(archive.lastPathComponent): \(error.localizedDescription)")
+                errors.append("\(url.lastPathComponent): \(error.localizedDescription)")
             }
+            job.finished(of: urls.count)
         }
-
-        progress?.completed = archives.count
-        return outcome
+        return errors
     }
 
-    /// Copying out of an archive extracts to a staging folder first, then hands
-    /// the real files to the normal copy path. That is a little more work than
-    /// unpacking straight into the destination, but it means copying out gets
-    /// the same conflict dialog, progress and undo as any other copy instead of
-    /// silently overwriting whatever is already there.
-    func copyOut(
-        paths: [String],
-        from archive: URL,
-        strippingComponents: Int,
-        to destination: URL
-    ) async -> TransferOutcome {
+    /// Copying out of an archive extracts to a staging folder first, then hands the real
+    /// files to the ordinary copy, so it gets the same conflict question and undo.
+    func copyOut(paths: [String], from archive: URL, strippingComponents: Int, to destination: URL,
+                 rename: String?, job: Job) async -> TransferOutcome {
         var outcome = TransferOutcome()
         guard !paths.isEmpty else { return outcome }
 
@@ -193,51 +219,27 @@ final class TransferController: ObservableObject {
             .appendingPathComponent("MACCommander-staging-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: staging) }
 
-        progress = TransferProgress(
-            title: "Reading \(paths.count) item\(paths.count == 1 ? "" : "s") from \(archive.lastPathComponent)…",
-            current: "", completed: 0, total: 1
-        )
+        job.started(archive.lastPathComponent)
         do {
             try await Task.detached(priority: .userInitiated) {
                 try ArchiveService.extractEntries(paths, from: archive, into: staging,
                                                   strippingComponents: strippingComponents)
             }.value
         } catch {
-            progress = nil
             outcome.errors.append("\(archive.lastPathComponent): \(error.localizedDescription)")
             return outcome
         }
-        progress = nil
 
-        let staged = (try? FileManager.default.contentsOfDirectory(
-            at: staging, includingPropertiesForKeys: nil)) ?? []
+        let staged = (try? FileManager.default.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil)) ?? []
         guard !staged.isEmpty else {
             outcome.errors.append("Nothing was read out of \(archive.lastPathComponent).")
             return outcome
         }
-        return await run(kind: .copy, sources: staged, destination: destination)
+        return await run(kind: .copy, sources: staged, destination: destination,
+                         rename: staged.count == 1 ? rename : nil, job: job)
     }
 
-    func trash(_ urls: [URL]) -> [String] {
-        var errors: [String] = []
-        for url in urls {
-            do {
-                try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-            } catch {
-                errors.append("\(url.lastPathComponent): \(error.localizedDescription)")
-            }
-        }
-        return errors
-    }
-
-    private func askAboutConflict(source: URL, destination: URL) async -> (ConflictDecision, Bool) {
-        await withCheckedContinuation { continuation in
-            decisionContinuation = continuation
-            conflict = ConflictRequest(source: source, destination: destination)
-        }
-    }
-
-    /// "report.pdf" -> "report 2.pdf", "report 3.pdf", …
+    /// "report.pdf" -> "report 2.pdf", "report 3.pdf", ...
     static func uniqueURL(for url: URL) -> URL {
         let fm = FileManager.default
         guard fm.fileExists(atPath: url.path) else { return url }

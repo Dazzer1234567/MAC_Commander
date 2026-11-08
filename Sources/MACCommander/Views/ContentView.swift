@@ -4,7 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var state: AppState
     @ObservedObject var transfer: TransferController
-    @FocusState private var focusedSide: Side?
+    @State private var dragStartRatio: Double?
 
     init(state: AppState) {
         self.state = state
@@ -12,250 +12,139 @@ struct ContentView: View {
     }
 
     var body: some View {
+        let ui = state.ui
         VStack(spacing: 0) {
-            quickBar
-            Divider()
-            splitArea
-            if let progress = transfer.progress {
-                Divider()
-                TransferBar(progress: progress) { transfer.cancel() }
-            }
-            Divider()
-            CommandBar(state: state)
+            WorkspaceToolbar(state: state)
+            LayoutBar(state: state)
+            panes(ui)
+            CommandLineBar(state: state)
+            FunctionKeyBar(state: state)
         }
-        .onChange(of: focusedSide) { _, newValue in
-            if let newValue { state.activeSide = newValue }
+        .background(ui.window)
+        .overlay(alignment: .bottomTrailing) { JobBoxes(jobs: state.jobs) }
+        .environment(\.ui, ui)
+        .background(WindowSetup(state: state))
+        // Questions go on the main window, or on top of whatever dialog is open.
+        .sheet(item: Binding(get: { state.sheet == nil ? state.prompt : nil },
+                             set: { if $0 == nil && state.sheet == nil && state.prompt != nil { state.finishPrompt(nil) } })) { request in
+            PromptSheet(request: request, finish: { state.finishPrompt($0) }).environment(\.ui, ui)
         }
-        .onAppear { focusedSide = .left }
-        .sheet(item: $state.sheet) { kind in
-            sheetContent(for: kind)
+        .background(EmptyView().sheet(item: $state.sheet) { request in
+            request.view
+                .sheet(item: Binding(get: { state.prompt }, set: { if $0 == nil && state.prompt != nil { state.finishPrompt(nil) } })) { prompt in
+                    PromptSheet(request: prompt, finish: { state.finishPrompt($0) }).environment(\.ui, ui)
+                }
+        })
+        .background(EmptyView().sheet(item: $transfer.conflict) { request in
+            ConflictSheet(request: request) { transfer.resolve($0, applyToAll: $1) }.environment(\.ui, ui)
+        })
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // Some folders cannot be watched; coming back to the window catches them up.
+            state.catchUpQuietly()
         }
-        .sheet(item: $transfer.conflict) { request in
-            ConflictSheet(request: request) { decision, applyToAll in
-                transfer.resolve(decision, applyToAll: applyToAll)
-            }
-        }
-        .alert(
-            "Some items could not be handled",
-            isPresented: Binding(
-                get: { !state.errorReport.isEmpty },
-                set: { if !$0 { state.errorReport = [] } }
-            )
-        ) {
-            Button("OK", role: .cancel) { state.errorReport = [] }
-        } message: {
-            Text(state.errorReport.prefix(10).joined(separator: "\n"))
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            state.saveNow()
         }
     }
 
-    private static let handleWidth: CGFloat = 6
-    private static let minPaneWidth: CGFloat = 220
-
-    /// A split laid out by hand rather than with `HSplitView`, because
-    /// HSplitView offers no way to set the divider position and is not
-    /// dependably backed by an NSSplitView we could drive instead. Owning the
-    /// width outright is what makes Fit a one-line reset.
-    private var splitArea: some View {
+    private func panes(_ ui: UI) -> some View {
         GeometryReader { geometry in
-            let fixed = CenterBar.width + Self.handleWidth
-            let evenSplit = max(Self.minPaneWidth, (geometry.size.width - fixed) / 2)
-            let widest = max(Self.minPaneWidth, geometry.size.width - fixed - Self.minPaneWidth)
-            let leftWidth = min(max(state.leftPaneWidth ?? evenSplit, Self.minPaneWidth), widest)
+            let strip = CenterStrip.width(ui)
+            let available = max(0, geometry.size.width - strip)
+            let ratio = min(max(state.settings.splitRatio, 0.15), 0.85)
+            let leftWidth = (available * ratio).rounded()
+            // The strip's buttons line up with the first row of the lists.
+            let top = 3 + ui.s(30) + 3 + ui.s(25) + ui.s(22)
 
             HStack(spacing: 0) {
-                PaneView(pane: state.left, state: state, side: .left, focusedSide: $focusedSide)
-                    .frame(width: leftWidth)
-                dragHandle
-                CenterBar(state: state)
-                    .frame(width: CenterBar.width)
-                PaneView(pane: state.right, state: state, side: .right, focusedSide: $focusedSide)
-                    .frame(maxWidth: .infinity)
-            }
-            .coordinateSpace(name: "split")
-        }
-    }
-
-    private var dragHandle: some View {
-        Rectangle()
-            .fill(Color(nsColor: .separatorColor))
-            .frame(width: Self.handleWidth)
-            .contentShape(Rectangle())
-            .onHover { inside in
-                if inside { NSCursor.resizeLeftRight.set() } else { NSCursor.arrow.set() }
-            }
-            .gesture(
-                DragGesture(minimumDistance: 1, coordinateSpace: .named("split"))
-                    .onChanged { value in
-                        state.leftPaneWidth = value.location.x
+                PaneView(pane: state.left, state: state).frame(width: leftWidth)
+                CenterStrip(state: state, topOffset: top)
+                    .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("panes"))
+                        .onChanged { value in
+                            guard available > 0 else { return }
+                            state.settings.splitRatio = min(max((value.location.x - strip / 2) / available, 0.15), 0.85)
+                            state.objectWillChange.send()
+                        }
+                        .onEnded { _ in state.scheduleSave() })
+                    .onHover { inside in
+                        if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
                     }
-            )
-    }
-
-    private var quickBar: some View {
-        // Zero-length spacers centre the row when it fits and collapse when it
-        // does not, so a long list of links keeps the full width instead of
-        // being pushed off the edge.
-        HStack(spacing: 0) {
-            Spacer(minLength: 0)
-
-            HStack(spacing: 6) {
-                Button {
-                    state.active.navigate(to: FileManager.default.homeDirectoryForCurrentUser
-                        .appendingPathComponent("Downloads"))
-                } label: {
-                    Label("Downloads", systemImage: "arrow.down.circle")
-                }
-                .help("Show Downloads in the \(state.activeSide == .left ? "left" : "right") pane")
-
-                if !state.links.items.isEmpty {
-                    Divider().frame(height: 16)
-                }
-
-                ForEach(state.links.items) { link in
-                    linkButton(link)
-                }
+                PaneView(pane: state.right, state: state).frame(maxWidth: .infinity)
             }
-
-            Spacer(minLength: 0)
+            .coordinateSpace(name: "panes")
         }
-        .controlSize(.regular)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(Color(nsColor: .windowBackgroundColor))
-    }
-
-    /// A folder pinned with the Link button. Like every shortcut in this bar it
-    /// targets whichever pane is active, rather than a fixed side — clicking a
-    /// shortcut never moves the focus, so the pane you were working in is the
-    /// one that navigates.
-    private func linkButton(_ link: Bookmark) -> some View {
-        Button {
-            state.active.navigate(to: link.url)
-        } label: {
-            Label(link.name, systemImage: "folder.fill")
-                .lineLimit(1)
-        }
-        .help("Show \(link.path) in the \(state.activeSide == .left ? "left" : "right") pane")
-        .contextMenu {
-            Button("Remove Link") { state.links.remove(link) }
-            Button("Remove All Links") { state.links.removeAll() }
-        }
-    }
-
-    @ViewBuilder
-    private func sheetContent(for kind: SheetKind) -> some View {
-        switch kind {
-        case .newFolder:
-            NameSheet(
-                title: "New Folder",
-                prompt: "Create in \(state.active.directory.lastPathComponent)",
-                initialText: "untitled folder",
-                confirmLabel: "Create"
-            ) { name in
-                state.performNewFolder(named: name)
-            }
-        case .rename(let item):
-            NameSheet(
-                title: "Rename",
-                prompt: item.name,
-                initialText: item.name,
-                confirmLabel: "Rename"
-            ) { name in
-                state.performRename(item, to: name)
-            }
-        case .confirmTrash(let items):
-            TrashConfirmSheet(items: items) {
-                state.performTrash(items)
-            }
-        case .manageBookmarks:
-            BookmarksSheet(store: state.bookmarks)
-        case .peekArchive(let item):
-            PeekSheet(item: item)
-        }
+        .padding(3)
     }
 }
 
-/// The Total Commander style function-key strip along the bottom of the window.
-struct CommandBar: View {
-    @ObservedObject var state: AppState
+/// Reaches the hosting window once, to give it a size and position that persist.
+struct WindowSetup: NSViewRepresentable {
+    let state: AppState
 
-    var body: some View {
-        HStack(spacing: 6) {
-            key("Rename", shortcut: "F2", alt: "⇧⌘E") { state.requestRename() }
-            key("Copy", shortcut: "F5", alt: "⇧⌘C") { state.copyToOtherPane() }
-            key("Move", shortcut: "F6", alt: "⇧⌘M") { state.moveToOtherPane() }
-            key("New Folder", shortcut: "F7", alt: "⇧⌘N") { state.sheet = .newFolder }
-            key("Delete", shortcut: "F8", alt: "⌘⌫") { state.requestTrash() }
-            key("Peek", shortcut: "⌘Y") { state.peekArchive() }
-                .disabled(state.archiveToPeek == nil)
-                .help(state.archiveToPeek == nil
-                      ? "Select one archive to look inside it"
-                      : "Look inside \(state.archiveToPeek!.name) — ⌘Y")
-            key("Link", shortcut: "⌘L") { state.linkActiveDirectory() }
-            key("Path", shortcut: "⌥⌘P") { state.copySelectedNames() }
-            key("Full", shortcut: "⌥⌘F") { state.copySelectedFullPaths() }
-            Divider().frame(height: 16)
-            key("Undo", shortcut: "⌘Z") { state.undoLast() }
-                .disabled(!state.canUndo)
-                .help(state.canUndo ? "Undo \(state.undoLabel) — ⌘Z" : "Nothing to undo")
+    final class Hook: NSView {
+        var onWindow: (NSWindow) -> Void = { _ in }
+        private var done = false
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window, !done else { return }
+            done = true
+            DispatchQueue.main.async { self.onWindow(window) }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .overlay(alignment: .trailing) {
-            Text("Tab switches panes")
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
-                .padding(.trailing, 8)
-        }
-        .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    /// Word only — the shortcuts live in the tooltip and the menus, so the row
-    /// stays narrow enough to fit even at the smallest window size.
-    private func key(
-        _ title: String,
-        shortcut: String,
-        alt: String? = nil,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 11))
-                .padding(.horizontal, 4)
-                .padding(.vertical, 2)
+    func makeNSView(context: Context) -> NSView {
+        let view = Hook()
+        view.onWindow = { window in
+            window.setFrameAutosaveName("MACCommanderMain")
+            window.title = "MAC Commander — \(state.active.currentPath)"
+            window.tabbingMode = .disallowed
+            state.active.focusRequest += 1
+            WindowSetup.snapshotIfAsked(window)
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .help(alt.map { "\(title) — \(shortcut) or \($0)" } ?? "\(title) — \(shortcut)")
+        return view
     }
-}
 
-struct TransferBar: View {
-    let progress: TransferProgress
-    let onCancel: () -> Void
-
-    var body: some View {
-        HStack(spacing: 10) {
-            ProgressView(value: progress.fraction)
-                .frame(width: 160)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(progress.title).font(.system(size: 11, weight: .medium))
-                Text(progress.current)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+    /// For checking the layout without a screen: `open --env MACC_SNAPSHOT=/tmp/x.png`
+    /// makes the app draw its own window into that file a few seconds after it starts,
+    /// and again whenever `/tmp/x.png.request` appears.
+    static func snapshotIfAsked(_ window: NSWindow) {
+        guard let path = ProcessInfo.processInfo.environment["MACC_SNAPSHOT"] else { return }
+        func shoot() {
+            guard let view = window.contentView?.superview ?? window.contentView else { return }
+            // The window server's own picture of this window: SwiftUI's layers do not draw
+            // through cacheDisplay or layer rendering. An app may always capture itself.
+            typealias Capture = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
+            if let handle = dlopen(nil, RTLD_NOW), let symbol = dlsym(handle, "CGWindowListCreateImage") {
+                let capture = unsafeBitCast(symbol, to: Capture.self)
+                // optionIncludingWindow = 8, imageBoundsIgnoreFraming = 1
+                if let image = capture(.null, 8, UInt32(window.windowNumber), 1)?.takeRetainedValue() {
+                    let rep = NSBitmapImageRep(cgImage: image)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                }
             }
-            Spacer()
-            Text("\(progress.completed) / \(progress.total)")
-                .font(.system(size: 10).monospacedDigit())
-                .foregroundStyle(.secondary)
-            Button("Cancel", action: onCancel)
-                .controlSize(.small)
+
+            var dump = "window \(window.frame) first responder \(String(describing: window.firstResponder))\n"
+            func walk(_ v: NSView, _ depth: Int) {
+                guard depth < 14 else { return }
+                var line = String(repeating: "  ", count: depth) + "\(type(of: v)) \(v.frame.integral)"
+                if v.isHidden { line += " HIDDEN" }
+                if let t = v as? NSTableView { line += " rows=\(t.numberOfRows) cols=\(t.numberOfColumns)" }
+                if let f = v as? NSTextField { line += " '\(f.stringValue.prefix(40))'" }
+                dump += line + "\n"
+                for s in v.subviews { walk(s, depth + 1) }
+            }
+            walk(view, 0)
+            try? dump.write(toFile: path + ".txt", atomically: true, encoding: .utf8)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Color(nsColor: .windowBackgroundColor))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { shoot() }
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+            let request = path + ".request"
+            if FileManager.default.fileExists(atPath: request) {
+                try? FileManager.default.removeItem(atPath: request)
+                shoot()
+            }
+        }
     }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }

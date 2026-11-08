@@ -8,49 +8,6 @@ struct Bookmark: Codable, Identifiable, Hashable {
     var url: URL { URL(fileURLWithPath: path) }
 }
 
-/// Folders pinned to the top bar with the Link button. Separate from
-/// `BookmarkStore` so the bar starts empty and only ever holds what you put
-/// there, rather than the default Home/Desktop/Documents set.
-@MainActor
-final class LinkStore: ObservableObject {
-    @Published var items: [Bookmark] = [] {
-        didSet { save() }
-    }
-
-    private let storageKey = "links.v1"
-
-    init() {
-        if let data = UserDefaults.standard.data(forKey: storageKey),
-           let decoded = try? JSONDecoder().decode([Bookmark].self, from: data) {
-            items = decoded
-        }
-    }
-
-    /// Returns false when the folder is already linked, so the caller can say so.
-    @discardableResult
-    func add(_ url: URL) -> Bool {
-        let standardized = url.standardizedFileURL
-        let path = standardized.path
-        guard !items.contains(where: { $0.path == path }) else { return false }
-        let name = standardized.lastPathComponent
-        items.append(Bookmark(name: name.isEmpty || name == "/" ? "Macintosh HD" : name, path: path))
-        return true
-    }
-
-    func remove(_ link: Bookmark) {
-        items.removeAll { $0.id == link.id }
-    }
-
-    func removeAll() {
-        items.removeAll()
-    }
-
-    private func save() {
-        guard let data = try? JSONEncoder().encode(items) else { return }
-        UserDefaults.standard.set(data, forKey: storageKey)
-    }
-}
-
 @MainActor
 final class BookmarkStore: ObservableObject {
     @Published var items: [Bookmark] = [] {
