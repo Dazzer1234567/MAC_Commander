@@ -8,7 +8,6 @@ struct PaneView: View {
     @ObservedObject var state: AppState
     @Environment(\.ui) private var ui
     @State private var pathText = ""
-    @State private var editingPath = false
 
     private var isActive: Bool { state.activeSide == pane.side }
 
@@ -50,7 +49,7 @@ struct PaneView: View {
         // nudges the list by a pixel.
         .overlay(Rectangle().strokeBorder(isActive ? ui.palette.borderActive.swiftUI : ui.border, lineWidth: 3))
         .onAppear { pathText = pane.currentPath }
-        .onChange(of: pane.location) { _, _ in if !editingPath { pathText = pane.currentPath } }
+        .onChange(of: pane.location) { _, _ in pathText = pane.currentPath }
     }
 
     private var driveBar: some View {
@@ -83,19 +82,18 @@ struct PaneView: View {
         DazTextField(text: $pathText, font: ui.nsFont(12), textColor: ui.palette.text,
                      background: ui.palette.panel,
                      onSubmit: {
-                         editingPath = false
-                         if !pane.navigate(pathText) { pathText = pane.currentPath }
-                         pane.focusRequest += 1
-                     },
-                     onCancel: {
-                         editingPath = false
+                         pane.navigate(pathText)
+                         // "~" or a relative path is shown as where it led
                          pathText = pane.currentPath
                          pane.focusRequest += 1
                      },
-                     onFocus: {
-                         editingPath = true
-                         pane.activate()
-                     })
+                     onCancel: {
+                         pathText = pane.currentPath
+                         pane.focusRequest += 1
+                     },
+                     onFocus: { pane.activate() },
+                     // Typed but abandoned by clicking elsewhere: show where the pane is.
+                     onEndEditing: { pathText = pane.currentPath })
             .frame(height: ui.s(22))
             .padding(EdgeInsets(top: 0, leading: ui.s(3) + 3, bottom: ui.s(3), trailing: ui.s(3) + 3))
             .background(ui.panel)

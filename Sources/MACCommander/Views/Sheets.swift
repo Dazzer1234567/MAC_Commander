@@ -14,6 +14,8 @@ struct DazTextField: NSViewRepresentable {
     var onSubmit: () -> Void = {}
     var onCancel: () -> Void = {}
     var onFocus: () -> Void = {}
+    /// The keyboard left the field without Return or Escape.
+    var onEndEditing: () -> Void = {}
 
     func makeNSView(context: Context) -> NSTextField {
         let field = FocusReportingField()
@@ -39,7 +41,14 @@ struct DazTextField: NSViewRepresentable {
     func updateNSView(_ field: NSTextField, context: Context) {
         context.coordinator.parent = self
         apply(to: field)
-        if field.currentEditor() == nil && field.stringValue != text { field.stringValue = text }
+        // Follows the bound text unless the user has typed something not yet sent:
+        // merely having the keyboard is not a reason to stop showing where things are.
+        if !context.coordinator.dirty && field.stringValue != text {
+            field.stringValue = text
+            if let editor = field.currentEditor() {
+                editor.selectedRange = NSRange(location: (text as NSString).length, length: 0)
+            }
+        }
         if context.coordinator.lastTrigger != focusTrigger {
             context.coordinator.lastTrigger = focusTrigger
             DispatchQueue.main.async {
@@ -61,20 +70,31 @@ struct DazTextField: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: DazTextField
         var lastTrigger = 0
+        /// Typed into since the last Return, Escape or loss of focus.
+        var dirty = false
         init(_ parent: DazTextField) { self.parent = parent; lastTrigger = parent.focusTrigger }
+
+        func controlTextDidEndEditing(_ note: Notification) {
+            guard dirty else { return }
+            dirty = false
+            parent.onEndEditing()
+        }
 
         func controlTextDidChange(_ note: Notification) {
             guard let field = note.object as? NSTextField else { return }
+            dirty = true
             parent.text = field.stringValue
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             if selector == #selector(NSResponder.insertNewline(_:)) {
+                dirty = false
                 parent.text = control.stringValue
                 parent.onSubmit()
                 return true
             }
             if selector == #selector(NSResponder.cancelOperation(_:)) {
+                dirty = false
                 parent.onCancel()
                 return true
             }
