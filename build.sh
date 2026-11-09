@@ -41,14 +41,21 @@ printf 'APPL????' > "${APP}/Contents/PkgInfo"
 
 # macOS re-asks for folder access whenever the app's signing identity changes.
 # An ad-hoc signature is identified by the binary's hash, which changes on every
-# build — so prefer the stable self-signed identity from ./make-signing-cert.sh
-# when it exists, and only fall back to ad-hoc.
-IDENTITY="MAC Commander Local"
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "$IDENTITY"; then
-	codesign --force --sign "$IDENTITY" "$APP" >/dev/null 2>&1 \
-		&& echo "==> signed as \"$IDENTITY\"" \
-		|| echo "   (signing with \"$IDENTITY\" failed)"
+# build. So prefer the self-signed identity from ./make-signing-cert.sh, then the Mac's own
+# Apple Development certificate (the same identity on every build, keyed on the
+# team rather than the binary), and only then ad-hoc.
+IDENTITY=""
+IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null)"
+for CANDIDATE in "MAC Commander Local" "Apple Development" "Developer ID Application"; do
+	if echo "$IDENTITIES" | grep -q "\"$CANDIDATE"; then
+		IDENTITY="$(echo "$IDENTITIES" | grep "\"$CANDIDATE" | head -1 | sed -E 's/.*"(.*)".*/\1/')"
+		break
+	fi
+done
+if [ -n "$IDENTITY" ] && codesign --force --sign "$IDENTITY" "$APP" >/dev/null 2>&1; then
+	echo "==> signed as \"$IDENTITY\""
 else
+	[ -n "$IDENTITY" ] && echo "   (signing with \"$IDENTITY\" failed - is the keychain locked?)"
 	codesign --force --sign - "$APP" >/dev/null 2>&1 || echo "   (codesign skipped)"
 	echo "   note: ad-hoc signed, so macOS will re-ask for folder access after"
 	echo "         each rebuild. Run ./make-signing-cert.sh once to stop that."
